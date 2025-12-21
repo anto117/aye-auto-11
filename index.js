@@ -4,19 +4,29 @@ const http = require('http');
 const axios = require('axios'); 
 const { Server } = require("socket.io");
 const db = require('./config/db'); 
-const admin = require("firebase-admin"); // 🟢 Added Firebase
+const admin = require("firebase-admin"); 
 require('dotenv').config();
 
-// 🟢 INITIALIZE FIREBASE (You need to add your serviceAccountKey.json file)
-// For now, we will wrap this in a try-catch so the server doesn't crash if you haven't added it yet.
+// 🟢 INITIALIZE FIREBASE (Securely via Env Var)
 try {
-    const serviceAccount = require("./serviceAccountKey.json"); 
-    admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
-    });
-    console.log("🔥 Firebase Admin Initialized");
+    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+        // Option 1: Production (Render Environment Variable)
+        const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+        console.log("🔥 Firebase Admin Initialized (via Env Var)");
+    } else {
+        // Option 2: Local Development (File)
+        const serviceAccount = require("./serviceAccountKey.json"); 
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+        console.log("🔥 Firebase Admin Initialized (via Local File)");
+    }
 } catch (e) {
-    console.log("⚠️ Firebase not initialized (Missing serviceAccountKey.json)");
+    console.log("⚠️ Firebase Not Initialized: " + e.message);
+    console.log("   (Make sure FIREBASE_SERVICE_ACCOUNT is set in Render Environment)");
 }
 
 const app = express();
@@ -187,8 +197,6 @@ io.on('connection', (socket) => {
         io.emit('driver_request', payload);
 
         // 🟢 2. Send Push Notification (For background/killed apps)
-        // Note: In a real app, you would target the specific 'nearestDriver' found earlier.
-        // For now, we will just notify ALL online drivers in our memory
         Object.values(activeDrivers).forEach(driver => {
              sendPushNotification(driver.driverId, "New Ride Request! 🚖", `Drop: ${data.destination} - ₹${data.fare}`);
         });
@@ -196,8 +204,6 @@ io.on('connection', (socket) => {
 
     // 🟢 4. DRIVER ACCEPTS
     socket.on('accept_ride', async (data) => {
-        // ... (Existing logic kept same for brevity, ensure you copy previous logic here if needed)
-        // For this snippet, assume standard accept logic
          io.to(data.rider_id).emit('ride_accepted', {
             driverName: "Driver",
             vehicle: "Auto",
