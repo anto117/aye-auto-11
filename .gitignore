@@ -1,0 +1,7 @@
+node_modules/
+.env
+*.json
+!package.json
+!package-lock.json
+aye-auto-5af4c-firebase-adminsdk-fbsvc-0bfadaae58.json
+serviceAccountKey.json
