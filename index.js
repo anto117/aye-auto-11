@@ -202,8 +202,11 @@ io.on('connection', (socket) => {
         });
     });
 
-    // 🟢 4. DRIVER ACCEPTS
+    // 🟢 4. DRIVER ACCEPTS (FIXED: Now sends route to driver)
     socket.on('accept_ride', async (data) => {
+        console.log("✅ Driver Accepted Request:", data.rider_id);
+
+        // 1. Notify Rider
          io.to(data.rider_id).emit('ride_accepted', {
             driverName: "Driver",
             vehicle: "Auto",
@@ -212,6 +215,19 @@ io.on('connection', (socket) => {
             lat: data.driverLat,
             lng: data.driverLng,
             fare: data.fare 
+        });
+
+        // 🟢 2. NEW: Calculate Route for Driver (Driver -> Pickup)
+        const pickupRoute = await getRouteData(data.driverLat, data.driverLng, `${data.pickupLat},${data.pickupLng}`);
+        
+        // 🟢 3. NEW: Calculate Route for Trip (Pickup -> Drop)
+        const dropRoute = await getRouteData(data.pickupLat, data.pickupLng, `${data.dropLat},${data.dropLng}`);
+
+        // 🟢 4. NEW: Send "Start" Signal to Driver
+        socket.emit('ride_started_info', {
+            pickupPolyline: pickupRoute ? pickupRoute.polyline : null, 
+            dropPolyline: dropRoute ? dropRoute.polyline : null,     
+            totalFare: data.fare 
         });
     });
 
