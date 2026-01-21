@@ -14,7 +14,6 @@ try {
         admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
         console.log("🔥 Firebase Admin Initialized (via Env Var)");
     } else {
-        // Fallback for local testing
         try {
             const serviceAccount = require("./serviceAccountKey.json"); 
             admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
@@ -106,7 +105,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 2. DRIVER DISCONNECTS
     socket.on('disconnect', async () => {
         try {
              await db.query(`UPDATE drivers SET is_online = false WHERE socket_id = $1`, [socket.id]);
@@ -115,7 +113,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 3. GET ESTIMATE (FIXED SQL QUERY)
+    // 🟢 3. GET ESTIMATE (FIXED: Using ST_Distance with Type Casting)
     socket.on('get_estimate', async (data) => {
         const tripRoute = await getRouteData(data.pickupLat, data.pickupLng, data.destination);
         if (!tripRoute) {
@@ -124,15 +122,17 @@ io.on('connection', (socket) => {
         }
 
         try {
-            // 🔍 FIXED QUERY: Extract lat/lng from 'location' column using ST_Y and ST_X
+            // 🔍 FIXED QUERY: 
+            // 1. Cast ST_MakePoint to ::geography
+            // 2. Use ST_Distance (Native for geography) instead of ST_DistanceSphere
             const driverRes = await db.query(
                 `SELECT id, 
                         ST_Y(location::geometry) as lat, 
                         ST_X(location::geometry) as lng, 
-                        ST_DistanceSphere(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)) as distance_m
+                        ST_Distance(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) as distance_m
                  FROM drivers
                  WHERE is_online = true
-                 ORDER BY location <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)
+                 ORDER BY location <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
                  LIMIT 1`,
                 [data.pickupLng, data.pickupLat]
             );
@@ -144,7 +144,6 @@ io.on('connection', (socket) => {
             if (driverRes.rows.length > 0) {
                 nearestDriver = driverRes.rows[0];
                 
-                // Calculate approach distance via Road (Google API)
                 const approachRoute = await getRouteData(nearestDriver.lat, nearestDriver.lng, `${data.pickupLat},${data.pickupLng}`);
                 if (approachRoute) {
                     approachKm = approachRoute.distanceKm;
@@ -176,7 +175,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 4. REQUEST RIDE -> Notify Nearby Drivers
+    // 🟢 4. REQUEST RIDE (FIXED: Using ST_DWithin with Type Casting)
     socket.on('request_ride', async (data) => {
         console.log("📲 Ride Requested by:", socket.id);
         
@@ -188,12 +187,12 @@ io.on('connection', (socket) => {
             );
             const rideId = result.rows[0].id;
 
-            // Find drivers within 5km
+            // 🔍 FIXED QUERY: Cast to ::geography for accurate meters check
             const nearbyDrivers = await db.query(
                 `SELECT socket_id, fcm_token 
                  FROM drivers 
                  WHERE is_online = true 
-                 AND ST_DWithin(location, ST_SetSRID(ST_MakePoint($1, $2), 4326), 5000)`, 
+                 AND ST_DWithin(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, 5000)`, 
                 [data.pickupLng, data.pickupLat]
             );
 
