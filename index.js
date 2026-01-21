@@ -14,9 +14,14 @@ try {
         admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
         console.log("🔥 Firebase Admin Initialized (via Env Var)");
     } else {
-        const serviceAccount = require("./serviceAccountKey.json"); 
-        admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-        console.log("🔥 Firebase Admin Initialized (via Local File)");
+        // Fallback for local testing
+        try {
+            const serviceAccount = require("./serviceAccountKey.json"); 
+            admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+            console.log("🔥 Firebase Admin Initialized (via Local File)");
+        } catch(err) {
+             console.log("⚠️ No local firebase key found.");
+        }
     }
 } catch (e) {
     console.log("⚠️ Firebase Not Initialized: " + e.message);
@@ -86,8 +91,6 @@ io.on('connection', (socket) => {
     // 🟢 1. DRIVER MOVES -> Update DB (PostGIS)
     socket.on('driver_location', async (data) => {
         try {
-            // Update Location, Heading, Socket ID, and Online Status
-            // ST_SetSRID(ST_MakePoint(lng, lat), 4326) creates a geospatial point
             await db.query(
                 `UPDATE drivers 
                  SET location = ST_SetSRID(ST_MakePoint($1, $2), 4326), 
@@ -98,9 +101,6 @@ io.on('connection', (socket) => {
                  WHERE id = $6`,
                 [data.lng, data.lat, data.heading, socket.id, data.fcmToken, data.driverId]
             );
-            
-            // Optional: Broadcast to riders monitoring this specific driver?
-            // For now, we rely on polling or specific ride events.
         } catch (err) {
             console.error("Geo Update Error:", err.message);
         }
@@ -108,12 +108,14 @@ io.on('connection', (socket) => {
 
     // 🟢 2. DRIVER DISCONNECTS
     socket.on('disconnect', async () => {
-        // Mark driver as offline if needed, or just leave them. 
-        // Best practice: Mark offline so they don't appear in search.
-        await db.query(`UPDATE drivers SET is_online = false WHERE socket_id = $1`, [socket.id]);
+        try {
+             await db.query(`UPDATE drivers SET is_online = false WHERE socket_id = $1`, [socket.id]);
+        } catch(e) {
+            console.error("Disconnect Error", e.message);
+        }
     });
 
-    // 🟢 3. GET ESTIMATE (Find Nearest Driver via PostGIS)
+    // 🟢 3. GET ESTIMATE (FIXED SQL QUERY)
     socket.on('get_estimate', async (data) => {
         const tripRoute = await getRouteData(data.pickupLat, data.pickupLng, data.destination);
         if (!tripRoute) {
@@ -122,10 +124,12 @@ io.on('connection', (socket) => {
         }
 
         try {
-            // 🔍 POSTGIS QUERY: Find nearest driver within 10km (10000 meters)
-            // ST_DistanceSphere gives distance in meters
+            // 🔍 FIXED QUERY: Extract lat/lng from 'location' column using ST_Y and ST_X
             const driverRes = await db.query(
-                `SELECT id, lat, lng, ST_DistanceSphere(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)) as distance_m
+                `SELECT id, 
+                        ST_Y(location::geometry) as lat, 
+                        ST_X(location::geometry) as lng, 
+                        ST_DistanceSphere(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)) as distance_m
                  FROM drivers
                  WHERE is_online = true
                  ORDER BY location <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)
@@ -159,7 +163,7 @@ io.on('connection', (socket) => {
                 fareCash: Math.ceil(totalWithCommission / 10) * 10,
                 baseFare: Math.round(baseFare),
                 tripDistance: tripRoute.distanceText,
-                driverDistance: approachText, // Distance from driver to user
+                driverDistance: approachText,
                 hasDriver: nearestDriver != null,
                 polyline: tripRoute.polyline,
                 dropLat: tripRoute.endLat,
@@ -172,12 +176,11 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 4. REQUEST RIDE -> Notify Nearby Drivers (PostGIS)
+    // 🟢 4. REQUEST RIDE -> Notify Nearby Drivers
     socket.on('request_ride', async (data) => {
         console.log("📲 Ride Requested by:", socket.id);
         
         try {
-            // Save initial request
             const result = await db.query(
                 `INSERT INTO rides (rider_id, pickup_lat, pickup_lng, drop_lat, drop_lng, fare, status) 
                  VALUES ($1, $2, $3, $4, $5, $6, 'REQUESTED') RETURNING id`,
@@ -185,24 +188,21 @@ io.on('connection', (socket) => {
             );
             const rideId = result.rows[0].id;
 
-            // 🔍 FIND ALL DRIVERS WITHIN 5KM
+            // Find drivers within 5km
             const nearbyDrivers = await db.query(
                 `SELECT socket_id, fcm_token 
                  FROM drivers 
                  WHERE is_online = true 
-                 AND ST_DWithin(location, ST_SetSRID(ST_MakePoint($1, $2), 4326), 5000)`, // 5000 meters
+                 AND ST_DWithin(location, ST_SetSRID(ST_MakePoint($1, $2), 4326), 5000)`, 
                 [data.pickupLng, data.pickupLat]
             );
 
             const payload = { ...data, ride_id: rideId, rider_socket_id: socket.id };
 
-            // Broadcast to found drivers
             nearbyDrivers.rows.forEach(driver => {
-                // 1. Via Socket (if app is open)
                 if (driver.socket_id) {
                     io.to(driver.socket_id).emit('driver_request', payload);
                 }
-                // 2. Via Notification (if app is background)
                 if (driver.fcm_token) {
                     sendPushNotification(driver.fcm_token, "New Ride Request! 🚖", `Drop: ${data.destination} - ₹${data.fare}`);
                 }
@@ -231,7 +231,6 @@ io.on('connection', (socket) => {
                 fare: data.fare 
             });
 
-            // Get Routes
             const pickupRoute = await getRouteData(data.driverLat, data.driverLng, `${data.pickupLat},${data.pickupLng}`);
             const dropRoute = await getRouteData(data.pickupLat, data.pickupLng, `${data.dropLat},${data.dropLng}`);
 
