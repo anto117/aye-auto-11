@@ -113,7 +113,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 3. GET ESTIMATE (FIXED: Using ST_Distance with Type Casting)
+    // 🟢 2. GET ESTIMATE (FIXED)
     socket.on('get_estimate', async (data) => {
         const tripRoute = await getRouteData(data.pickupLat, data.pickupLng, data.destination);
         if (!tripRoute) {
@@ -122,9 +122,6 @@ io.on('connection', (socket) => {
         }
 
         try {
-            // 🔍 FIXED QUERY: 
-            // 1. Cast ST_MakePoint to ::geography
-            // 2. Use ST_Distance (Native for geography) instead of ST_DistanceSphere
             const driverRes = await db.query(
                 `SELECT id, 
                         ST_Y(location::geometry) as lat, 
@@ -143,7 +140,6 @@ io.on('connection', (socket) => {
 
             if (driverRes.rows.length > 0) {
                 nearestDriver = driverRes.rows[0];
-                
                 const approachRoute = await getRouteData(nearestDriver.lat, nearestDriver.lng, `${data.pickupLat},${data.pickupLng}`);
                 if (approachRoute) {
                     approachKm = approachRoute.distanceKm;
@@ -175,7 +171,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 4. REQUEST RIDE (FIXED: Using ST_DWithin with Type Casting)
+    // 🟢 3. REQUEST RIDE (FIXED: Send 'rider_id' as Socket ID)
     socket.on('request_ride', async (data) => {
         console.log("📲 Ride Requested by:", socket.id);
         
@@ -187,7 +183,6 @@ io.on('connection', (socket) => {
             );
             const rideId = result.rows[0].id;
 
-            // 🔍 FIXED QUERY: Cast to ::geography for accurate meters check
             const nearbyDrivers = await db.query(
                 `SELECT socket_id, fcm_token 
                  FROM drivers 
@@ -196,7 +191,8 @@ io.on('connection', (socket) => {
                 [data.pickupLng, data.pickupLat]
             );
 
-            const payload = { ...data, ride_id: rideId, rider_socket_id: socket.id };
+            // ⚠️ FIX: Send 'rider_id' as socket.id so Driver App can return it
+            const payload = { ...data, ride_id: rideId, rider_id: socket.id };
 
             nearbyDrivers.rows.forEach(driver => {
                 if (driver.socket_id) {
@@ -212,7 +208,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 5. ACCEPT RIDE
+    // 🟢 4. ACCEPT RIDE (FIXED: Read 'rider_id' to notify correct user)
     socket.on('accept_ride', async (data) => {
         try {
             await db.query(
@@ -220,7 +216,8 @@ io.on('connection', (socket) => {
                 [data.driver_id, data.ride_id]
             );
 
-            io.to(data.rider_socket_id).emit('ride_accepted', {
+            // ⚠️ FIX: Use 'rider_id' (which is the Socket ID sent by Driver)
+            io.to(data.rider_id).emit('ride_accepted', {
                 driverName: "Driver",
                 vehicle: "Auto",
                 rating: "4.9",
@@ -244,16 +241,19 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 6. DRIVER ARRIVED
+    // 🟢 5. DRIVER ARRIVED
     socket.on('driver_arrived', async (data) => {
         await db.query(`UPDATE rides SET status = 'ARRIVED' WHERE id = $1`, [data.ride_id]);
-        io.to(data.rider_socket_id).emit('driver_arrived_notification', {
+        
+        // Use 'rider_id' if available, otherwise 'rider_socket_id' fallback
+        const targetSocket = data.rider_id || data.rider_socket_id;
+        io.to(targetSocket).emit('driver_arrived_notification', {
             msg: "Driver has arrived!",
             dropPolyline: data.dropPolyline 
         });
     });
 
-    // 🟢 7. COMPLETE RIDE
+    // 🟢 6. COMPLETE RIDE
     socket.on('complete_ride', async (data) => {
         try {
             await db.query(
