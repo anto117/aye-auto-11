@@ -36,5 +36,21 @@ router.post('/login', async (req, res) => {
         res.status(500).json({ success: false, msg: "Server error" });
     }
 });
-
+// 🟢 GET RIDE HISTORY
+router.get('/history/:riderId', async (req, res) => {
+    try {
+        const { riderId } = req.params;
+        const result = await db.query(
+            `SELECT id, destination, fare, status, created_at 
+             FROM rides 
+             WHERE rider_id = $1 
+             ORDER BY id DESC`, 
+            [riderId]
+        );
+        res.json({ success: true, history: result.rows });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
 module.exports = router;
