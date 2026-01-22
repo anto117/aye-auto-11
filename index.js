@@ -113,7 +113,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 2. GET ESTIMATE (FIXED)
+    // 🟢 2. GET ESTIMATE
     socket.on('get_estimate', async (data) => {
         const tripRoute = await getRouteData(data.pickupLat, data.pickupLng, data.destination);
         if (!tripRoute) {
@@ -171,15 +171,24 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 3. REQUEST RIDE (FIXED: Send 'rider_id' as Socket ID)
+    // 🟢 3. REQUEST RIDE (UPDATED: Saves Destination)
     socket.on('request_ride', async (data) => {
         console.log("📲 Ride Requested by:", socket.id);
         
         try {
+            // 🟢 Fix: Added 'destination' to INSERT statement
             const result = await db.query(
-                `INSERT INTO rides (rider_id, pickup_lat, pickup_lng, drop_lat, drop_lng, fare, status) 
-                 VALUES ($1, $2, $3, $4, $5, $6, 'REQUESTED') RETURNING id`,
-                [data.riderId || 0, data.pickupLat, data.pickupLng, data.dropLat, data.dropLng, data.fare]
+                `INSERT INTO rides (rider_id, pickup_lat, pickup_lng, drop_lat, drop_lng, fare, status, destination) 
+                 VALUES ($1, $2, $3, $4, $5, $6, 'REQUESTED', $7) RETURNING id`,
+                [
+                    data.riderId || 0, 
+                    data.pickupLat, 
+                    data.pickupLng, 
+                    data.dropLat, 
+                    data.dropLng, 
+                    data.fare,
+                    data.destination || "Pinned Location" // 🟢 Save Text Address
+                ]
             );
             const rideId = result.rows[0].id;
 
@@ -208,7 +217,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 4. ACCEPT RIDE (FIXED: Read 'rider_id' to notify correct user)
+    // 🟢 4. ACCEPT RIDE
     socket.on('accept_ride', async (data) => {
         try {
             await db.query(
@@ -216,7 +225,6 @@ io.on('connection', (socket) => {
                 [data.driver_id, data.ride_id]
             );
 
-            // ⚠️ FIX: Use 'rider_id' (which is the Socket ID sent by Driver)
             io.to(data.rider_id).emit('ride_accepted', {
                 driverName: "Driver",
                 vehicle: "Auto",
@@ -245,7 +253,6 @@ io.on('connection', (socket) => {
     socket.on('driver_arrived', async (data) => {
         await db.query(`UPDATE rides SET status = 'ARRIVED' WHERE id = $1`, [data.ride_id]);
         
-        // Use 'rider_id' if available, otherwise 'rider_socket_id' fallback
         const targetSocket = data.rider_id || data.rider_socket_id;
         io.to(targetSocket).emit('driver_arrived_notification', {
             msg: "Driver has arrived!",
