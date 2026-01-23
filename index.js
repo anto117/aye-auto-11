@@ -87,10 +87,10 @@ async function sendPushNotification(token, title, body) {
 io.on('connection', (socket) => {
     console.log(`⚡ Client: ${socket.id}`);
 
-    // 🟢 1. DRIVER MOVES / COMES ONLINE
+    // 🟢 1. DRIVER MOVES / COMES ONLINE (UPDATED)
     socket.on('driver_location', async (data) => {
         try {
-            // Update Driver Location
+            // A. Update Driver Location
             await db.query(
                 `UPDATE drivers 
                  SET location = ST_SetSRID(ST_MakePoint($1, $2), 4326), 
@@ -102,23 +102,9 @@ io.on('connection', (socket) => {
                 [data.lng, data.lat, data.heading, socket.id, data.fcmToken, data.driverId]
             );
 
-            // 🟢 CHECK FOR PENDING RIDES NEARBY
-            // If this driver just came online, check if there are any waiting requests around them
+            // B. CHECK FOR PENDING RIDES (The Fix!)
+            // If there is a "REQUESTED" ride within 5km, send it to this driver immediately.
             const pendingRides = await db.query(
-                `SELECT * FROM rides 
-                 WHERE status = 'REQUESTED' 
-                 AND ST_DWithin(
-                     ST_SetSRID(ST_MakePoint(pickup_lng, pickup_lat), 4326)::geography, 
-                     location, 
-                     5000
-                 ) LIMIT 1`, // Check pending rides within 5km of this driver
-                [] // No parameters needed for the subquery logic here as 'location' refers to the driver row just updated
-            );
-
-            // Note: The above query logic is slightly complex because we need the driver's location we just updated.
-            // A safer way is to fetch the pending rides relative to the lat/lng sent in 'data'.
-            
-            const nearbyPendingRides = await db.query(
                 `SELECT * FROM rides 
                  WHERE status = 'REQUESTED' 
                  AND ST_DWithin(
@@ -129,14 +115,13 @@ io.on('connection', (socket) => {
                 [data.lng, data.lat]
             );
 
-            if (nearbyPendingRides.rows.length > 0) {
-                const ride = nearbyPendingRides.rows[0];
-                console.log(`♻️ Resending pending ride ${ride.id} to driver ${socket.id}`);
+            if (pendingRides.rows.length > 0) {
+                const ride = pendingRides.rows[0];
+                console.log(`♻️ Driver came online. Sending pending ride ${ride.id}`);
                 
-                // Reconstruct the payload for the driver
                 const payload = {
                     ride_id: ride.id,
-                    rider_id: ride.rider_socket_id, // We stored this now
+                    rider_id: ride.rider_socket_id, // We retrieved the saved socket ID
                     pickupLat: ride.pickup_lat,
                     pickupLng: ride.pickup_lng,
                     dropLat: ride.drop_lat,
@@ -230,7 +215,7 @@ io.on('connection', (socket) => {
                  VALUES ($1, $2, $3, $4, $5, $6, $7, 'REQUESTED', $8) RETURNING id`,
                 [
                     data.riderId || 0, 
-                    socket.id, // 🟢 Store the socket ID
+                    socket.id, // 🟢 Save this so late drivers can reply
                     data.pickupLat, 
                     data.pickupLng, 
                     data.dropLat, 
@@ -273,7 +258,7 @@ io.on('connection', (socket) => {
                 [data.driver_id, data.ride_id]
             );
 
-            // ⚠️ FIX: Use 'rider_id' (which is the Socket ID sent by Driver)
+            // Notify Rider (Using the ID passed back from Driver)
             io.to(data.rider_id).emit('ride_accepted', {
                 driverName: "Driver",
                 vehicle: "Auto",
@@ -302,6 +287,7 @@ io.on('connection', (socket) => {
     socket.on('driver_arrived', async (data) => {
         await db.query(`UPDATE rides SET status = 'ARRIVED' WHERE id = $1`, [data.ride_id]);
         
+        // Fallback for rider socket ID if provided by client or use logic to fetch from DB
         const targetSocket = data.rider_id || data.rider_socket_id;
         io.to(targetSocket).emit('driver_arrived_notification', {
             msg: "Driver has arrived!",
