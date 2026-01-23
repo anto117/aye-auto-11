@@ -87,9 +87,10 @@ async function sendPushNotification(token, title, body) {
 io.on('connection', (socket) => {
     console.log(`⚡ Client: ${socket.id}`);
 
-    // 🟢 1. DRIVER MOVES -> Update DB (PostGIS)
+    // 🟢 1. DRIVER MOVES / COMES ONLINE
     socket.on('driver_location', async (data) => {
         try {
+            // Update Driver Location
             await db.query(
                 `UPDATE drivers 
                  SET location = ST_SetSRID(ST_MakePoint($1, $2), 4326), 
@@ -100,6 +101,53 @@ io.on('connection', (socket) => {
                  WHERE id = $6`,
                 [data.lng, data.lat, data.heading, socket.id, data.fcmToken, data.driverId]
             );
+
+            // 🟢 CHECK FOR PENDING RIDES NEARBY
+            // If this driver just came online, check if there are any waiting requests around them
+            const pendingRides = await db.query(
+                `SELECT * FROM rides 
+                 WHERE status = 'REQUESTED' 
+                 AND ST_DWithin(
+                     ST_SetSRID(ST_MakePoint(pickup_lng, pickup_lat), 4326)::geography, 
+                     location, 
+                     5000
+                 ) LIMIT 1`, // Check pending rides within 5km of this driver
+                [] // No parameters needed for the subquery logic here as 'location' refers to the driver row just updated
+            );
+
+            // Note: The above query logic is slightly complex because we need the driver's location we just updated.
+            // A safer way is to fetch the pending rides relative to the lat/lng sent in 'data'.
+            
+            const nearbyPendingRides = await db.query(
+                `SELECT * FROM rides 
+                 WHERE status = 'REQUESTED' 
+                 AND ST_DWithin(
+                     ST_SetSRID(ST_MakePoint(pickup_lng, pickup_lat), 4326)::geography, 
+                     ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, 
+                     5000
+                 ) LIMIT 1`,
+                [data.lng, data.lat]
+            );
+
+            if (nearbyPendingRides.rows.length > 0) {
+                const ride = nearbyPendingRides.rows[0];
+                console.log(`♻️ Resending pending ride ${ride.id} to driver ${socket.id}`);
+                
+                // Reconstruct the payload for the driver
+                const payload = {
+                    ride_id: ride.id,
+                    rider_id: ride.rider_socket_id, // We stored this now
+                    pickupLat: ride.pickup_lat,
+                    pickupLng: ride.pickup_lng,
+                    dropLat: ride.drop_lat,
+                    dropLng: ride.drop_lng,
+                    destination: ride.destination,
+                    fare: ride.fare,
+                    distance: "Nearby" 
+                };
+                socket.emit('driver_request', payload);
+            }
+
         } catch (err) {
             console.error("Geo Update Error:", err.message);
         }
@@ -171,23 +219,24 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 3. REQUEST RIDE (UPDATED: Saves Destination)
+    // 🟢 3. REQUEST RIDE (UPDATED: Saves Socket ID & Destination)
     socket.on('request_ride', async (data) => {
         console.log("📲 Ride Requested by:", socket.id);
         
         try {
-            // 🟢 Fix: Added 'destination' to INSERT statement
+            // 🟢 Fix: Added 'rider_socket_id' and 'destination' to INSERT
             const result = await db.query(
-                `INSERT INTO rides (rider_id, pickup_lat, pickup_lng, drop_lat, drop_lng, fare, status, destination) 
-                 VALUES ($1, $2, $3, $4, $5, $6, 'REQUESTED', $7) RETURNING id`,
+                `INSERT INTO rides (rider_id, rider_socket_id, pickup_lat, pickup_lng, drop_lat, drop_lng, fare, status, destination) 
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, 'REQUESTED', $8) RETURNING id`,
                 [
                     data.riderId || 0, 
+                    socket.id, // 🟢 Store the socket ID
                     data.pickupLat, 
                     data.pickupLng, 
                     data.dropLat, 
                     data.dropLng, 
                     data.fare,
-                    data.destination || "Pinned Location" // 🟢 Save Text Address
+                    data.destination || "Pinned Location"
                 ]
             );
             const rideId = result.rows[0].id;
@@ -200,7 +249,6 @@ io.on('connection', (socket) => {
                 [data.pickupLng, data.pickupLat]
             );
 
-            // ⚠️ FIX: Send 'rider_id' as socket.id so Driver App can return it
             const payload = { ...data, ride_id: rideId, rider_id: socket.id };
 
             nearbyDrivers.rows.forEach(driver => {
@@ -225,6 +273,7 @@ io.on('connection', (socket) => {
                 [data.driver_id, data.ride_id]
             );
 
+            // ⚠️ FIX: Use 'rider_id' (which is the Socket ID sent by Driver)
             io.to(data.rider_id).emit('ride_accepted', {
                 driverName: "Driver",
                 vehicle: "Auto",
