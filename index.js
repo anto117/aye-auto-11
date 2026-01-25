@@ -87,7 +87,7 @@ async function sendPushNotification(token, title, body) {
 io.on('connection', (socket) => {
     console.log(`⚡ Client: ${socket.id}`);
 
-    // 🟢 1. DRIVER MOVES / COMES ONLINE (UPDATED)
+    // 🟢 1. DRIVER MOVES / COMES ONLINE
     socket.on('driver_location', async (data) => {
         try {
             // A. Update Driver Location
@@ -102,8 +102,7 @@ io.on('connection', (socket) => {
                 [data.lng, data.lat, data.heading, socket.id, data.fcmToken, data.driverId]
             );
 
-            // B. CHECK FOR PENDING RIDES (The Fix!)
-            // If there is a "REQUESTED" ride within 5km, send it to this driver immediately.
+            // B. CHECK FOR PENDING RIDES
             const pendingRides = await db.query(
                 `SELECT * FROM rides 
                  WHERE status = 'REQUESTED' 
@@ -121,7 +120,7 @@ io.on('connection', (socket) => {
                 
                 const payload = {
                     ride_id: ride.id,
-                    rider_id: ride.rider_socket_id, // We retrieved the saved socket ID
+                    rider_id: ride.rider_socket_id, 
                     pickupLat: ride.pickup_lat,
                     pickupLng: ride.pickup_lng,
                     dropLat: ride.drop_lat,
@@ -204,18 +203,17 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 3. REQUEST RIDE (UPDATED: Saves Socket ID & Destination)
+    // 🟢 3. REQUEST RIDE
     socket.on('request_ride', async (data) => {
         console.log("📲 Ride Requested by:", socket.id);
         
         try {
-            // 🟢 Fix: Added 'rider_socket_id' and 'destination' to INSERT
             const result = await db.query(
                 `INSERT INTO rides (rider_id, rider_socket_id, pickup_lat, pickup_lng, drop_lat, drop_lng, fare, status, destination) 
                  VALUES ($1, $2, $3, $4, $5, $6, $7, 'REQUESTED', $8) RETURNING id`,
                 [
                     data.riderId || 0, 
-                    socket.id, // 🟢 Save this so late drivers can reply
+                    socket.id, 
                     data.pickupLat, 
                     data.pickupLng, 
                     data.dropLat, 
@@ -250,7 +248,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 4. ACCEPT RIDE
+    // 🟢 4. ACCEPT RIDE (UPDATED: Sends Driver Phone)
     socket.on('accept_ride', async (data) => {
         try {
             await db.query(
@@ -258,9 +256,13 @@ io.on('connection', (socket) => {
                 [data.driver_id, data.ride_id]
             );
 
-            // Notify Rider (Using the ID passed back from Driver)
+            // 🟢 Get Driver Details (Name & Phone) for User
+            const driverInfo = await db.query(`SELECT name, phone FROM drivers WHERE id = $1`, [data.driver_id]);
+            const driver = driverInfo.rows[0];
+
             io.to(data.rider_id).emit('ride_accepted', {
-                driverName: "Driver",
+                driverName: driver ? driver.name : "Driver",
+                driverPhone: driver ? driver.phone : "9876543210", // 🟢 Send Phone Number for Call Feature
                 vehicle: "Auto",
                 rating: "4.9",
                 eta: "5 mins",
@@ -283,11 +285,32 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 5. DRIVER ARRIVED
+    // 🟢 5. CANCEL RIDE (NEW: Handle Rider Cancellation)
+    socket.on('cancel_ride', async (data) => {
+        try {
+            console.log(`❌ Ride ${data.ride_id} cancelled by user.`);
+            
+            // Update DB Status
+            await db.query(`UPDATE rides SET status = 'CANCELLED' WHERE id = $1`, [data.ride_id]);
+
+            // Find the Driver and Notify them
+            const rideData = await db.query(`SELECT driver_id FROM rides WHERE id = $1`, [data.ride_id]);
+            
+            if (rideData.rows.length > 0 && rideData.rows[0].driver_id) {
+                const driverRes = await db.query(`SELECT socket_id FROM drivers WHERE id = $1`, [rideData.rows[0].driver_id]);
+                if (driverRes.rows.length > 0) {
+                    io.to(driverRes.rows[0].socket_id).emit('ride_cancelled_by_user');
+                }
+            }
+        } catch (err) {
+            console.error("Cancel Error:", err.message);
+        }
+    });
+
+    // 🟢 6. DRIVER ARRIVED
     socket.on('driver_arrived', async (data) => {
         await db.query(`UPDATE rides SET status = 'ARRIVED' WHERE id = $1`, [data.ride_id]);
         
-        // Fallback for rider socket ID if provided by client or use logic to fetch from DB
         const targetSocket = data.rider_id || data.rider_socket_id;
         io.to(targetSocket).emit('driver_arrived_notification', {
             msg: "Driver has arrived!",
@@ -295,7 +318,7 @@ io.on('connection', (socket) => {
         });
     });
 
-    // 🟢 6. COMPLETE RIDE
+    // 🟢 7. COMPLETE RIDE
     socket.on('complete_ride', async (data) => {
         try {
             await db.query(
