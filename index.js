@@ -219,6 +219,7 @@ io.on('connection', (socket) => {
     });
 
     // 🟢 4. ACCEPT RIDE (Sends Driver Info)
+    // 🟢 4. ACCEPT RIDE (FIXED: Now sends ride_id to Rider)
     socket.on('accept_ride', async (data) => {
         try {
             await db.query(
@@ -231,6 +232,7 @@ io.on('connection', (socket) => {
             const driver = driverInfo.rows[0];
 
             io.to(data.rider_id).emit('ride_accepted', {
+                ride_id: data.ride_id, // 🟢 CRITICAL FIX: Send Ride ID to Rider
                 driverName: driver ? driver.name : "Driver",
                 driverPhone: driver ? driver.phone : "9876543210", 
                 vehicle: "Auto",
