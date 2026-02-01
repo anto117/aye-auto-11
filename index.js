@@ -188,16 +188,22 @@ io.on('connection', (socket) => {
     });
 
     // 🟢 3. REQUEST RIDE
+    // 🟢 3. REQUEST RIDE (Updated to send Rider Phone)
     socket.on('request_ride', async (data) => {
         console.log("📲 Ride Requested by:", socket.id);
         
         try {
+            // 1. Get Rider's Phone Number
+            const riderRes = await db.query(`SELECT phone FROM riders WHERE id = $1`, [data.riderId]);
+            const riderPhone = riderRes.rows.length > 0 ? riderRes.rows[0].phone : null;
+
+            // 2. Insert Ride
             const result = await db.query(
                 `INSERT INTO rides (rider_id, rider_socket_id, pickup_lat, pickup_lng, drop_lat, drop_lng, fare, status, destination) 
                  VALUES ($1, $2, $3, $4, $5, $6, $7, 'REQUESTED', $8) RETURNING id`,
                 [
                     data.riderId || 0, 
-                    socket.id, // Save Socket ID for replies
+                    socket.id, 
                     data.pickupLat, 
                     data.pickupLng, 
                     data.dropLat, 
@@ -208,6 +214,7 @@ io.on('connection', (socket) => {
             );
             const rideId = result.rows[0].id;
 
+            // 3. Find Nearby Drivers
             const nearbyDrivers = await db.query(
                 `SELECT socket_id, fcm_token 
                  FROM drivers 
@@ -216,7 +223,13 @@ io.on('connection', (socket) => {
                 [data.pickupLng, data.pickupLat]
             );
 
-            const payload = { ...data, ride_id: rideId, rider_id: socket.id };
+            // 4. Construct Payload with Phone
+            const payload = { 
+                ...data, 
+                ride_id: rideId, 
+                rider_id: socket.id,
+                riderPhone: riderPhone // 🟢 ADDED PHONE HERE
+            };
 
             nearbyDrivers.rows.forEach(driver => {
                 if (driver.socket_id) {
