@@ -86,6 +86,20 @@ async function sendPushNotification(token, title, body) {
 // 🟢 SOCKET.IO LOGIC
 io.on('connection', (socket) => {
     console.log(`⚡ Client: ${socket.id}`);
+    // 🟢 8. HANDLE VOICE NOTES
+    socket.on('send_voice_note', (data) => {
+        console.log(`🎙️ Voice Note from ${socket.id} to Driver`);
+        // We need to find the driver's socket ID based on the ride_id
+        // For simplicity in hackathon, we assume the client sends the driver's socket ID or we look it up.
+        // Ideally:
+        // const driverSocket = await getDriverSocketFromRide(data.ride_id);
+        
+        // Forwarding to all connected clients for demo (or use specific room)
+        socket.broadcast.emit('receive_voice_note', {
+            audio_data: data.audio_data,
+            sender: "Rider"
+        });
+    });
 
     // 🟢 1. DRIVER MOVES / COMES ONLINE
     // (UPDATED: Removed the pending ride popup logic)
