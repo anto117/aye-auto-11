@@ -88,9 +88,9 @@ io.on('connection', (socket) => {
     console.log(`⚡ Client: ${socket.id}`);
 
     // 🟢 1. DRIVER MOVES / COMES ONLINE
+    // (UPDATED: Removed the pending ride popup logic)
     socket.on('driver_location', async (data) => {
         try {
-            // A. Update Driver Location
             await db.query(
                 `UPDATE drivers 
                  SET location = ST_SetSRID(ST_MakePoint($1, $2), 4326), 
@@ -101,37 +101,7 @@ io.on('connection', (socket) => {
                  WHERE id = $6`,
                 [data.lng, data.lat, data.heading, socket.id, data.fcmToken, data.driverId]
             );
-
-            // B. CHECK FOR PENDING RIDES
-            const pendingRides = await db.query(
-                `SELECT * FROM rides 
-                 WHERE status = 'REQUESTED' 
-                 AND ST_DWithin(
-                     ST_SetSRID(ST_MakePoint(pickup_lng, pickup_lat), 4326)::geography, 
-                     ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, 
-                     5000
-                 ) LIMIT 1`,
-                [data.lng, data.lat]
-            );
-
-            if (pendingRides.rows.length > 0) {
-                const ride = pendingRides.rows[0];
-                console.log(`♻️ Driver came online. Sending pending ride ${ride.id}`);
-                
-                const payload = {
-                    ride_id: ride.id,
-                    rider_id: ride.rider_socket_id, 
-                    pickupLat: ride.pickup_lat,
-                    pickupLng: ride.pickup_lng,
-                    dropLat: ride.drop_lat,
-                    dropLng: ride.drop_lng,
-                    destination: ride.destination,
-                    fare: ride.fare,
-                    distance: "Nearby" 
-                };
-                socket.emit('driver_request', payload);
-            }
-
+            // 🟢 Removed pending ride check here to stop auto-popups
         } catch (err) {
             console.error("Geo Update Error:", err.message);
         }
@@ -213,7 +183,7 @@ io.on('connection', (socket) => {
                  VALUES ($1, $2, $3, $4, $5, $6, $7, 'REQUESTED', $8) RETURNING id`,
                 [
                     data.riderId || 0, 
-                    socket.id, 
+                    socket.id, // Save Socket ID for replies
                     data.pickupLat, 
                     data.pickupLng, 
                     data.dropLat, 
@@ -248,7 +218,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 4. ACCEPT RIDE (UPDATED: Sends Driver Phone)
+    // 🟢 4. ACCEPT RIDE (Sends Driver Info)
     socket.on('accept_ride', async (data) => {
         try {
             await db.query(
@@ -256,13 +226,13 @@ io.on('connection', (socket) => {
                 [data.driver_id, data.ride_id]
             );
 
-            // 🟢 Get Driver Details (Name & Phone) for User
+            // Get Driver Details
             const driverInfo = await db.query(`SELECT name, phone FROM drivers WHERE id = $1`, [data.driver_id]);
             const driver = driverInfo.rows[0];
 
             io.to(data.rider_id).emit('ride_accepted', {
                 driverName: driver ? driver.name : "Driver",
-                driverPhone: driver ? driver.phone : "9876543210", // 🟢 Send Phone Number for Call Feature
+                driverPhone: driver ? driver.phone : "9876543210", 
                 vehicle: "Auto",
                 rating: "4.9",
                 eta: "5 mins",
@@ -285,15 +255,13 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 5. CANCEL RIDE (NEW: Handle Rider Cancellation)
+    // 🟢 5. CANCEL RIDE
     socket.on('cancel_ride', async (data) => {
         try {
             console.log(`❌ Ride ${data.ride_id} cancelled by user.`);
             
-            // Update DB Status
             await db.query(`UPDATE rides SET status = 'CANCELLED' WHERE id = $1`, [data.ride_id]);
 
-            // Find the Driver and Notify them
             const rideData = await db.query(`SELECT driver_id FROM rides WHERE id = $1`, [data.ride_id]);
             
             if (rideData.rows.length > 0 && rideData.rows[0].driver_id) {
