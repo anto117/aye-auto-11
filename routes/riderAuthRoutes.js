@@ -1,39 +1,77 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../config/db');
-// const bcrypt = require('bcrypt'); // Use bcrypt for real apps!
+const bcrypt = require('bcrypt');
+const db = require('../config/db'); // Adjust path to your db config
 
-// REGISTER
+// 🟢 1. REGISTER (Updated with Error Handling)
 router.post('/register', async (req, res) => {
-    const { name, phone, email, gender, password } = req.body;
     try {
-        // In production, hash password here: const hash = await bcrypt.hash(password, 10);
-        const newUser = await db.query(
-            "INSERT INTO riders (name, phone, email, gender, password) VALUES ($1, $2, $3, $4, $5) RETURNING *",
-            [name, phone, email, gender, password] 
+        const { name, phone, email, gender, password } = req.body;
+        
+        // Hash Password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        // Insert User
+        const result = await db.query(
+            `INSERT INTO riders (name, phone, email, gender, password) 
+             VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+            [name, phone, email, gender, hashedPassword]
         );
-        res.json({ success: true, user: newUser.rows[0] });
+
+        res.json({ success: true, user: result.rows[0] });
+
     } catch (err) {
+        // 🟢 FIX: Handle Duplicate Phone Number
+        if (err.code === '23505') { 
+            return res.json({ success: false, msg: "This phone number is already registered. Please login." });
+        }
         console.error(err);
-        res.status(500).json({ success: false, msg: "Server Error" });
+        res.status(500).json({ success: false, error: "Server error" });
     }
 });
 
-// LOGIN
+// 🟢 2. LOGIN (Existing)
 router.post('/login', async (req, res) => {
-    const { phone, password } = req.body;
     try {
-        const user = await db.query("SELECT * FROM riders WHERE phone = $1", [phone]);
-        if (user.rows.length === 0) return res.status(400).json({ success: false, msg: "User not found" });
+        const { phone, password } = req.body;
+        const result = await db.query("SELECT * FROM riders WHERE phone = $1", [phone]);
 
-        if (user.rows[0].password !== password) {
-            return res.status(400).json({ success: false, msg: "Incorrect password" });
+        if (result.rows.length === 0) return res.json({ success: false, msg: "User not found" });
+
+        const validPass = await bcrypt.compare(password, result.rows[0].password);
+        if (!validPass) return res.json({ success: false, msg: "Invalid Password" });
+
+        res.json({ success: true, user: result.rows[0] });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 🟢 3. RESET PASSWORD (New Feature)
+// Allows resetting password using JUST the phone number
+router.post('/reset-password', async (req, res) => {
+    try {
+        const { phone, newPassword } = req.body;
+
+        // 1. Check if user exists
+        const userCheck = await db.query("SELECT * FROM riders WHERE phone = $1", [phone]);
+        if (userCheck.rows.length === 0) {
+            return res.json({ success: false, msg: "Phone number not registered" });
         }
 
-        res.json({ success: true, user: user.rows[0] });
+        // 2. Hash New Password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+        // 3. Update Database
+        await db.query("UPDATE riders SET password = $1 WHERE phone = $2", [hashedPassword, phone]);
+
+        res.json({ success: true, msg: "Password updated successfully!" });
+
     } catch (err) {
         console.error(err);
-        res.status(500).json({ success: false, msg: "Server error" });
+        res.status(500).json({ success: false, error: "Server error" });
     }
 });
 // 🟢 GET RIDE HISTORY
