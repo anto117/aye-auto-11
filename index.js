@@ -256,18 +256,42 @@ io.on('connection', (socket) => {
     });
 
     // 🟢 5. CANCEL RIDE
+    // 🟢 5. CANCEL RIDE (Updated with Debug Logs)
     socket.on('cancel_ride', async (data) => {
+        console.log(`⚠️ Cancel Request Received:`, data); // 🟢 Log the raw data
+
+        if (!data.ride_id) {
+            console.error("❌ Cancel Error: No ride_id provided!");
+            return;
+        }
+
         try {
-            console.log(`❌ Ride ${data.ride_id} cancelled by user.`);
+            console.log(`❌ Processing Cancellation for Ride ${data.ride_id}`);
             
+            // 1. Update DB Status
             await db.query(`UPDATE rides SET status = 'CANCELLED' WHERE id = $1`, [data.ride_id]);
 
+            // 2. Find the Driver
             const rideData = await db.query(`SELECT driver_id FROM rides WHERE id = $1`, [data.ride_id]);
             
-            if (rideData.rows.length > 0 && rideData.rows[0].driver_id) {
-                const driverRes = await db.query(`SELECT socket_id FROM drivers WHERE id = $1`, [rideData.rows[0].driver_id]);
-                if (driverRes.rows.length > 0) {
-                    io.to(driverRes.rows[0].socket_id).emit('ride_cancelled_by_user');
+            if (rideData.rows.length > 0) {
+                const driverId = rideData.rows[0].driver_id;
+                console.log(`👉 Ride was assigned to Driver ID: ${driverId}`);
+
+                if (driverId) {
+                    // 3. Find Driver's Socket
+                    const driverRes = await db.query(`SELECT socket_id FROM drivers WHERE id = $1`, [driverId]);
+                    if (driverRes.rows.length > 0) {
+                        const driverSocket = driverRes.rows[0].socket_id;
+                        console.log(`📲 Notifying Driver at Socket: ${driverSocket}`);
+                        
+                        // 4. Emit Event
+                        io.to(driverSocket).emit('ride_cancelled_by_user');
+                    } else {
+                        console.log("⚠️ Driver found in DB but has no active socket.");
+                    }
+                } else {
+                    console.log("ℹ️ No driver had accepted this ride yet.");
                 }
             }
         } catch (err) {
