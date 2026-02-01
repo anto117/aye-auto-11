@@ -257,48 +257,51 @@ io.on('connection', (socket) => {
 
     // 🟢 5. CANCEL RIDE
     // 🟢 5. CANCEL RIDE (Updated with Debug Logs)
+    // 🟢 5. CANCEL RIDE (Debugging Version)
     socket.on('cancel_ride', async (data) => {
-        console.log(`⚠️ Cancel Request Received:`, data); // 🟢 Log the raw data
+        console.log(`⚠️ Cancel Request Received for Ride ID:`, data.ride_id);
 
         if (!data.ride_id) {
-            console.error("❌ Cancel Error: No ride_id provided!");
+            console.error("❌ Cancel Error: No ride_id provided in request.");
             return;
         }
 
         try {
-            console.log(`❌ Processing Cancellation for Ride ${data.ride_id}`);
-            
             // 1. Update DB Status
             await db.query(`UPDATE rides SET status = 'CANCELLED' WHERE id = $1`, [data.ride_id]);
+            console.log(`✅ Database updated to CANCELLED for Ride ${data.ride_id}`);
 
-            // 2. Find the Driver
+            // 2. Find the Driver for this ride
             const rideData = await db.query(`SELECT driver_id FROM rides WHERE id = $1`, [data.ride_id]);
             
             if (rideData.rows.length > 0) {
                 const driverId = rideData.rows[0].driver_id;
-                console.log(`👉 Ride was assigned to Driver ID: ${driverId}`);
-
+                
                 if (driverId) {
-                    // 3. Find Driver's Socket
+                    console.log(`👉 Ride was assigned to Driver ID: ${driverId}`);
+
+                    // 3. Find Driver's CURRENT Socket ID
                     const driverRes = await db.query(`SELECT socket_id FROM drivers WHERE id = $1`, [driverId]);
+                    
                     if (driverRes.rows.length > 0) {
                         const driverSocket = driverRes.rows[0].socket_id;
-                        console.log(`📲 Notifying Driver at Socket: ${driverSocket}`);
+                        console.log(`📲 Sending 'ride_cancelled_by_user' to Socket: ${driverSocket}`);
                         
-                        // 4. Emit Event
+                        // 4. Send Notification
                         io.to(driverSocket).emit('ride_cancelled_by_user');
                     } else {
-                        console.log("⚠️ Driver found in DB but has no active socket.");
+                        console.log("⚠️ Driver found in DB but has no active socket ID recorded.");
                     }
                 } else {
-                    console.log("ℹ️ No driver had accepted this ride yet.");
+                    console.log("ℹ️ No driver had accepted this ride yet (driver_id is null).");
                 }
+            } else {
+                console.log("❌ Ride ID not found in database.");
             }
         } catch (err) {
-            console.error("Cancel Error:", err.message);
+            console.error("Cancel Logic Error:", err.message);
         }
     });
-
     // 🟢 6. DRIVER ARRIVED
     socket.on('driver_arrived', async (data) => {
         await db.query(`UPDATE rides SET status = 'ARRIVED' WHERE id = $1`, [data.ride_id]);
