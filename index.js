@@ -12,12 +12,12 @@ try {
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
         const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
         admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-        console.log("🔥 Firebase Admin Initialized (via Env Var)");
+        console.log("🔥 Firebase Admin Initialized");
     } else {
         try {
             const serviceAccount = require("./serviceAccountKey.json"); 
             admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-            console.log("🔥 Firebase Admin Initialized (via Local File)");
+            console.log("🔥 Firebase Admin Initialized (Local)");
         } catch(err) {
              console.log("⚠️ No local firebase key found.");
         }
@@ -44,7 +44,7 @@ app.use('/api/rider-auth', riderAuthRoutes);
 const io = new Server(server, { cors: { origin: "*" } });
 const GOOGLE_API_KEY = "AIzaSyCb3i7_Y_jvTtwyni1SwucLoDayMqqrmJ8"; 
 
-// --- HELPER: Google Route Data ---
+// --- HELPER: Google Route Data (Fixes Distance Accuracy) ---
 async function getRouteData(startLat, startLng, destinationInput) {
     try {
         const destParam = encodeURIComponent(destinationInput);
@@ -77,17 +77,32 @@ async function sendPushNotification(token, title, body) {
             notification: { title: title, body: body },
             data: { click_action: "FLUTTER_NOTIFICATION_CLICK", sound: "default" }
         });
-        console.log(`📲 Notification sent.`);
     } catch (e) {
         console.error("Notification Error:", e.message);
     }
 }
 
+// 🟢 AUTO-FIX: STARTUP CLEANUP
+// This cancels any "Zombie Rides" so drivers become free when server restarts.
+async function clearStuckRides() {
+    try {
+        const res = await db.query(`UPDATE rides SET status = 'CANCELLED' WHERE status IN ('ACCEPTED', 'ARRIVED', 'ON_TRIP') RETURNING id`);
+        if (res.rowCount > 0) {
+            console.log(`🧹 AUTO-CLEANUP: Cancelled ${res.rowCount} stuck rides. Drivers are now free.`);
+        } else {
+            console.log(`✅ System Clean: No stuck rides found.`);
+        }
+    } catch (e) {
+        console.error("Cleanup Error", e);
+    }
+}
+clearStuckRides(); // Run immediately on startup
+
 // 🟢 SOCKET.IO LOGIC
 io.on('connection', (socket) => {
-    console.log(`⚡ Client: ${socket.id}`);
+    console.log(`⚡ Client Connected: ${socket.id}`);
 
-    // 🟢 1. DRIVER MOVES / COMES ONLINE
+    // 1. DRIVER MOVES / COMES ONLINE
     socket.on('driver_location', async (data) => {
         try {
             await db.query(
@@ -113,7 +128,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 2. GET ESTIMATE
+    // 2. GET ESTIMATE (Accurate Google Distance)
     socket.on('get_estimate', async (data) => {
         const tripRoute = await getRouteData(data.pickupLat, data.pickupLng, data.destination);
         if (!tripRoute) {
@@ -122,7 +137,7 @@ io.on('connection', (socket) => {
         }
 
         try {
-            // Check for nearest online driver to calculate ETA
+            // Find nearest online driver for ETA (Ignore busy status for estimate)
             const driverRes = await db.query(
                 `SELECT id, 
                         ST_Y(location::geometry) as lat, 
@@ -134,31 +149,30 @@ io.on('connection', (socket) => {
                 [data.pickupLng, data.pickupLat]
             );
 
-            let nearestDriver = null;
-            let approachKm = 0;
-            let approachText = "0 km";
+            let approachText = "5 mins"; // Default fallback
+            let hasDriver = false;
 
             if (driverRes.rows.length > 0) {
-                nearestDriver = driverRes.rows[0];
-                const approachRoute = await getRouteData(nearestDriver.lat, nearestDriver.lng, `${data.pickupLat},${data.pickupLng}`);
+                hasDriver = true;
+                const drv = driverRes.rows[0];
+                const approachRoute = await getRouteData(drv.lat, drv.lng, `${data.pickupLat},${data.pickupLng}`);
                 if (approachRoute) {
-                    approachKm = approachRoute.distanceKm;
-                    approachText = approachRoute.distanceText;
+                    approachText = approachRoute.durationText;
                 }
             }
 
-            const totalKm = approachKm + tripRoute.distanceKm;
-            let baseFare = totalKm * 30; // ₹30 per km logic
+            const totalKm = tripRoute.distanceKm;
+            let baseFare = totalKm * 30; // ₹30 per km
             if (baseFare < 30) baseFare = 30; 
             const commission = baseFare * 0.10;
-            const totalWithCommission = baseFare + commission;
+            const totalWithCommission = Math.round(baseFare + commission);
 
             socket.emit('estimate_response', {
-                fareUPI: Math.round(totalWithCommission),
+                fareUPI: totalWithCommission,
                 fareCash: Math.ceil(totalWithCommission / 10) * 10,
-                tripDistance: tripRoute.distanceText,
+                tripDistance: tripRoute.distanceText, // 🟢 Exact Google Distance
                 driverDistance: approachText,
-                hasDriver: nearestDriver != null,
+                hasDriver: hasDriver,
                 polyline: tripRoute.polyline,
                 dropLat: tripRoute.endLat,
                 dropLng: tripRoute.endLng
@@ -170,49 +184,47 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 3. REQUEST RIDE (WITH BUSY DRIVER FILTER)
+    // 3. REQUEST RIDE (With Busy Filter & Logs)
     socket.on('request_ride', async (data) => {
-        console.log("📲 Ride Requested by:", socket.id);
+        console.log(`📲 REQUEST RECEIVED: Pickup (${data.pickupLat}, ${data.pickupLng})`);
         
         try {
-            // 1. Get Rider's Phone Number
+            // Get Rider Phone
             const riderRes = await db.query(`SELECT phone FROM riders WHERE id = $1`, [data.riderId]);
             const riderPhone = riderRes.rows.length > 0 ? riderRes.rows[0].phone : null;
 
-            // 2. Insert Ride
+            // Insert Ride
             const result = await db.query(
                 `INSERT INTO rides (rider_id, rider_socket_id, pickup_lat, pickup_lng, drop_lat, drop_lng, fare, status, destination) 
                  VALUES ($1, $2, $3, $4, $5, $6, $7, 'REQUESTED', $8) RETURNING id`,
-                [
-                    data.riderId || 0, 
-                    socket.id, 
-                    data.pickupLat, 
-                    data.pickupLng, 
-                    data.dropLat, 
-                    data.dropLng, 
-                    data.fare,
-                    data.destination || "Pinned Location"
-                ]
+                [data.riderId || 0, socket.id, data.pickupLat, data.pickupLng, data.dropLat, data.dropLng, data.fare, data.destination]
             );
             const rideId = result.rows[0].id;
 
-            // 3. Find Nearby Drivers (WHO ARE NOT BUSY)
-            // We exclude drivers who are in rides with status ACCEPTED, ARRIVED, or ON_TRIP
+            // 🟢 Find Drivers (EXCLUDING BUSY ONES)
+            // Debugging: Increased radius to 50km to ensure we find YOU if you are online
             const nearbyDrivers = await db.query(
-                `SELECT socket_id, fcm_token 
+                `SELECT id, socket_id, fcm_token 
                  FROM drivers 
                  WHERE is_online = true 
                  AND id NOT IN (
-                     SELECT driver_id 
-                     FROM rides 
+                     SELECT driver_id FROM rides 
                      WHERE status IN ('ACCEPTED', 'ARRIVED', 'ON_TRIP') 
                      AND driver_id IS NOT NULL
                  )
-                 AND ST_DWithin(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, 5000)`, 
+                 AND ST_DWithin(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, 50000)`, 
                 [data.pickupLng, data.pickupLat]
             );
 
-            // 4. Send Request to Available Drivers
+            console.log(`🔎 Found ${nearbyDrivers.rows.length} available (free) drivers.`);
+
+            if (nearbyDrivers.rows.length === 0) {
+                // Debug log to see if any drivers exist at all
+                const allOnline = await db.query(`SELECT count(*) FROM drivers WHERE is_online = true`);
+                console.log(`⚠️ DEBUG: Total Online Drivers in DB: ${allOnline.rows[0].count}`);
+                console.log(`⚠️ If this number is > 0, they are likely marked as BUSY in the 'rides' table.`);
+            }
+
             const payload = { 
                 ...data, 
                 ride_id: rideId, 
@@ -221,6 +233,7 @@ io.on('connection', (socket) => {
             };
 
             nearbyDrivers.rows.forEach(driver => {
+                console.log(`👉 Sending request to Driver ID ${driver.id} (Socket: ${driver.socket_id})`);
                 if (driver.socket_id) {
                     io.to(driver.socket_id).emit('driver_request', payload);
                 }
@@ -234,25 +247,23 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 4. ACCEPT RIDE
+    // 4. ACCEPT RIDE
     socket.on('accept_ride', async (data) => {
+        console.log(`✅ Driver ${data.driver_id} ACCEPTED Ride ${data.ride_id}`);
         try {
-            // Driver becomes "Busy" here
             await db.query(
                 `UPDATE rides SET driver_id = $1, status = 'ACCEPTED' WHERE id = $2`,
                 [data.driver_id, data.ride_id]
             );
 
-            // Get Driver Details
             const driverInfo = await db.query(`SELECT name, phone FROM drivers WHERE id = $1`, [data.driver_id]);
             const driver = driverInfo.rows[0];
 
             io.to(data.rider_id).emit('ride_accepted', {
                 ride_id: data.ride_id, 
                 driverName: driver ? driver.name : "Driver",
-                driverPhone: driver ? driver.phone : "9876543210", 
+                driverPhone: driver ? driver.phone : "0000000000", 
                 vehicle: "Auto",
-                rating: "4.9",
                 eta: "5 mins",
                 lat: data.driverLat,
                 lng: data.driverLng,
@@ -273,17 +284,14 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 5. CANCEL RIDE
+    // 5. CANCEL RIDE
     socket.on('cancel_ride', async (data) => {
-        console.log(`⚠️ Cancel Request Received for Ride ID:`, data.ride_id);
-
+        console.log(`❌ Ride ${data.ride_id} Cancelled`);
         if (!data.ride_id) return;
 
         try {
-            // Update status to CANCELLED (Driver becomes FREE)
             await db.query(`UPDATE rides SET status = 'CANCELLED' WHERE id = $1`, [data.ride_id]);
             
-            // Find the Driver and Notify
             const rideData = await db.query(`SELECT driver_id FROM rides WHERE id = $1`, [data.ride_id]);
             
             if (rideData.rows.length > 0) {
@@ -301,7 +309,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 6. DRIVER ARRIVED
+    // 6. DRIVER ARRIVED
     socket.on('driver_arrived', async (data) => {
         await db.query(`UPDATE rides SET status = 'ARRIVED' WHERE id = $1`, [data.ride_id]);
         
@@ -312,28 +320,21 @@ io.on('connection', (socket) => {
         });
     });
 
-    // 🟢 7. COMPLETE RIDE
+    // 7. COMPLETE RIDE
     socket.on('complete_ride', async (data) => {
         try {
-            // Update status to COMPLETED (Driver becomes FREE)
             await db.query(
                 `UPDATE rides SET status = 'COMPLETED', payment_method = $1 WHERE id = $2`,
                 [data.paymentMethod, data.ride_id]
             );
             socket.emit('ride_saved_success');
-            
-            // Notify Rider (Optional)
-            // io.to(riderSocket).emit('ride_completed');
         } catch (err) {
             console.error("Error saving ride:", err);
         }
     });
 
-    // 🟢 8. HANDLE VOICE NOTES
+    // 8. HANDLE VOICE NOTES
     socket.on('send_voice_note', (data) => {
-        console.log(`🎙️ Voice Note from ${socket.id}`);
-        // This is a simple broadcast for the hackathon. 
-        // In production, find the specific driver/rider socket ID from the ride_id
         socket.broadcast.emit('receive_voice_note', {
             audio_data: data.audio_data,
             sender: "User"
