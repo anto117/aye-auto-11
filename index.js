@@ -103,8 +103,10 @@ io.on('connection', (socket) => {
     console.log(`⚡ Client Connected: ${socket.id}`);
 
     // 1. DRIVER MOVES / COMES ONLINE
+    // 🟢 1. DRIVER MOVES / COMES ONLINE
     socket.on('driver_location', async (data) => {
         try {
+            // 1. Update Driver Location & Status
             await db.query(
                 `UPDATE drivers 
                  SET location = ST_SetSRID(ST_MakePoint($1, $2), 4326), 
@@ -115,6 +117,21 @@ io.on('connection', (socket) => {
                  WHERE id = $6`,
                 [data.lng, data.lat, data.heading, socket.id, data.fcmToken, data.driverId]
             );
+
+            // 🟢 2. AUTO-FIX: Check if this driver is stuck in a "Busy" ride and free them
+            // If the App sends "driver_location", it means the Driver is on the Home Screen.
+            // So if the DB thinks they are in a ride, the DB is wrong. We cancel that ride.
+            const stuckRide = await db.query(
+                `UPDATE rides SET status = 'CANCELLED' 
+                 WHERE driver_id = $1 AND status IN ('ACCEPTED', 'ARRIVED', 'ON_TRIP') 
+                 RETURNING id`,
+                [data.driverId]
+            );
+
+            if (stuckRide.rowCount > 0) {
+                console.log(`🛠️ FIXED: Auto-cancelled stuck ride ${stuckRide.rows[0].id} for Driver ${data.driverId}. Driver is now FREE.`);
+            }
+
         } catch (err) {
             console.error("Geo Update Error:", err.message);
         }
