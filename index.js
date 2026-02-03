@@ -12,12 +12,12 @@ try {
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
         const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
         admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-        console.log("🔥 Firebase Admin Initialized");
+        console.log("🔥 Firebase Admin Initialized (via Env Var)");
     } else {
         try {
             const serviceAccount = require("./serviceAccountKey.json"); 
             admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-            console.log("🔥 Firebase Admin Initialized (Local)");
+            console.log("🔥 Firebase Admin Initialized (via Local File)");
         } catch(err) {
              console.log("⚠️ No local firebase key found.");
         }
@@ -44,7 +44,7 @@ app.use('/api/rider-auth', riderAuthRoutes);
 const io = new Server(server, { cors: { origin: "*" } });
 const GOOGLE_API_KEY = "AIzaSyCb3i7_Y_jvTtwyni1SwucLoDayMqqrmJ8"; 
 
-// --- HELPER: Google Route Data (Fixes Distance Accuracy) ---
+// --- HELPER: Google Route Data ---
 async function getRouteData(startLat, startLng, destinationInput) {
     try {
         const destParam = encodeURIComponent(destinationInput);
@@ -77,6 +77,7 @@ async function sendPushNotification(token, title, body) {
             notification: { title: title, body: body },
             data: { click_action: "FLUTTER_NOTIFICATION_CLICK", sound: "default" }
         });
+        console.log(`📲 Notification sent.`);
     } catch (e) {
         console.error("Notification Error:", e.message);
     }
@@ -102,7 +103,6 @@ clearStuckRides(); // Run immediately on startup
 io.on('connection', (socket) => {
     console.log(`⚡ Client Connected: ${socket.id}`);
 
-    // 1. DRIVER MOVES / COMES ONLINE
     // 🟢 1. DRIVER MOVES / COMES ONLINE
     socket.on('driver_location', async (data) => {
         try {
@@ -145,7 +145,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 2. GET ESTIMATE (Accurate Google Distance)
+    // 🟢 2. GET ESTIMATE (Updated Fare Logic)
     socket.on('get_estimate', async (data) => {
         const tripRoute = await getRouteData(data.pickupLat, data.pickupLng, data.destination);
         if (!tripRoute) {
@@ -154,7 +154,7 @@ io.on('connection', (socket) => {
         }
 
         try {
-            // Find nearest online driver for ETA (Ignore busy status for estimate)
+            // Find nearest online driver
             const driverRes = await db.query(
                 `SELECT id, 
                         ST_Y(location::geometry) as lat, 
@@ -179,15 +179,19 @@ io.on('connection', (socket) => {
             }
 
             const totalKm = tripRoute.distanceKm;
-            let baseFare = totalKm * 30; // ₹30 per km
+            
+            // 🟢 FARE CALCULATION (No Commission, No Round Up)
+            let baseFare = totalKm * 30; // Rate: ₹30 per km
+            
+            // Minimum Fare Rule
             if (baseFare < 30) baseFare = 30; 
-            const commission = baseFare * 0.10;
-            const totalWithCommission = Math.round(baseFare + commission);
+
+            const finalFare = Math.round(baseFare); 
 
             socket.emit('estimate_response', {
-                fareUPI: totalWithCommission,
-                fareCash: Math.ceil(totalWithCommission / 10) * 10,
-                tripDistance: tripRoute.distanceText, // 🟢 Exact Google Distance
+                fareUPI: finalFare,
+                fareCash: finalFare, // 🟢 EXACT FARE (No rounding up)
+                tripDistance: tripRoute.distanceText,
                 driverDistance: approachText,
                 hasDriver: hasDriver,
                 polyline: tripRoute.polyline,
@@ -201,7 +205,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 3. REQUEST RIDE (With Busy Filter & Logs)
+    // 🟢 3. REQUEST RIDE
     socket.on('request_ride', async (data) => {
         console.log(`📲 REQUEST RECEIVED: Pickup (${data.pickupLat}, ${data.pickupLng})`);
         
@@ -218,8 +222,7 @@ io.on('connection', (socket) => {
             );
             const rideId = result.rows[0].id;
 
-            // 🟢 Find Drivers (EXCLUDING BUSY ONES)
-            // Debugging: Increased radius to 50km to ensure we find YOU if you are online
+            // Find Drivers (EXCLUDING BUSY ONES)
             const nearbyDrivers = await db.query(
                 `SELECT id, socket_id, fcm_token 
                  FROM drivers 
@@ -236,10 +239,8 @@ io.on('connection', (socket) => {
             console.log(`🔎 Found ${nearbyDrivers.rows.length} available (free) drivers.`);
 
             if (nearbyDrivers.rows.length === 0) {
-                // Debug log to see if any drivers exist at all
                 const allOnline = await db.query(`SELECT count(*) FROM drivers WHERE is_online = true`);
                 console.log(`⚠️ DEBUG: Total Online Drivers in DB: ${allOnline.rows[0].count}`);
-                console.log(`⚠️ If this number is > 0, they are likely marked as BUSY in the 'rides' table.`);
             }
 
             const payload = { 
