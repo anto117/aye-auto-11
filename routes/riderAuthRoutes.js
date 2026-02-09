@@ -74,6 +74,39 @@ router.post('/reset-password', async (req, res) => {
         res.status(500).json({ success: false, error: "Server error" });
     }
 });
+// 🟢 NEW: LOGIN WITH FIREBASE (No OTP logic needed here)
+router.post('/firebase-login', async (req, res) => {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ msg: "Phone required" });
+
+    try {
+        // 1. Check if user exists
+        const userCheck = await db.query("SELECT * FROM riders WHERE phone = $1", [phone]);
+
+        if (userCheck.rows.length > 0) {
+            // User exists - Return their info
+            const user = userCheck.rows[0];
+            return res.json({ 
+                success: true, 
+                user: { id: user.id, name: user.name, phone: user.phone, rating: user.rating || 5.0 } 
+            });
+        } else {
+            // 2. New User - Create them
+            const newUser = await db.query(
+                "INSERT INTO riders (phone, name) VALUES ($1, 'Rider') RETURNING *",
+                [phone]
+            );
+            const user = newUser.rows[0];
+            return res.json({ 
+                success: true, 
+                user: { id: user.id, name: user.name, phone: user.phone, rating: 5.0 } 
+            });
+        }
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send("Server Error");
+    }
+});
 // 🟢 GET RIDE HISTORY
 router.get('/history/:riderId', async (req, res) => {
     try {
