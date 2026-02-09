@@ -124,4 +124,37 @@ router.get('/history/:riderId', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
+// 🟢 API: Login or Register via Firebase Phone
+router.post('/firebase-login', async (req, res) => {
+    const { phone, firebase_uid } = req.body;
+
+    try {
+        // 1. Check if user exists
+        const userCheck = await pool.query("SELECT * FROM riders WHERE phone = $1", [phone]);
+
+        if (userCheck.rows.length > 0) {
+            // USER EXISTS -> Login
+            const user = userCheck.rows[0];
+            
+            // Optional: Update Firebase UID if missing
+            if (!user.firebase_uid && firebase_uid) {
+                await pool.query("UPDATE riders SET firebase_uid = $1 WHERE phone = $2", [firebase_uid, phone]);
+            }
+
+            return res.json({ success: true, user: user, msg: "Login successful" });
+        } else {
+            // USER NEW -> Register (Create new account automatically)
+            // Note: Password is NULL because they used OTP
+            const newUser = await pool.query(
+                "INSERT INTO riders (name, phone, firebase_uid) VALUES ($1, $2, $3) RETURNING *",
+                ["New Rider", phone, firebase_uid]
+            );
+
+            return res.json({ success: true, user: newUser.rows[0], msg: "Account created" });
+        }
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).json({ success: false, msg: "Server Error" });
+    }
+});
 module.exports = router;
