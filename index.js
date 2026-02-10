@@ -252,14 +252,35 @@ io.on('connection', (socket) => {
     });
 
     // 4. ACCEPT RIDE
+    // 4. ACCEPT RIDE (Fixed for Race Condition)
     socket.on('accept_ride', async (data) => {
-        console.log(`✅ Driver ${data.driver_id} ACCEPTED Ride ${data.ride_id}`);
+        console.log(`Attempting to accept ride: ${data.ride_id} by Driver ${data.driver_id}`);
+        
         try {
-            await db.query(`UPDATE rides SET driver_id = $1, status = 'ACCEPTED' WHERE id = $2`, [data.driver_id, data.ride_id]);
+            // 🟢 ATOMIC UPDATE: This query will fail (return 0 rows) if the status is not 'REQUESTED'
+            const result = await db.query(
+                `UPDATE rides 
+                 SET driver_id = $1, status = 'ACCEPTED' 
+                 WHERE id = $2 AND status = 'REQUESTED' 
+                 RETURNING *`, 
+                [data.driver_id, data.ride_id]
+            );
 
+            // 🔴 FAIL: If no rows were updated, someone else took it first
+            if (result.rowCount === 0) {
+                console.log(`❌ Ride ${data.ride_id} already taken.`);
+                socket.emit('ride_booking_failed', { msg: "Ride already booked by another driver 😔" });
+                return; 
+            }
+
+            // 🟢 SUCCESS: You are the winner
+            console.log(`✅ Driver ${data.driver_id} WON the ride!`);
+            
+            // Fetch Driver Info to send to Rider
             const driverInfo = await db.query(`SELECT name, phone FROM drivers WHERE id = $1`, [data.driver_id]);
             const driver = driverInfo.rows[0];
 
+            // 1. Notify the Rider
             io.to(data.rider_id).emit('ride_accepted', {
                 ride_id: data.ride_id, 
                 driverName: driver ? driver.name : "Driver",
@@ -268,13 +289,19 @@ io.on('connection', (socket) => {
                 lat: data.driverLat, lng: data.driverLng, fare: data.fare 
             });
 
+            // 2. Notify the Driver (Confirmation)
+            socket.emit('ride_booking_success', { ride_id: data.ride_id });
+
+            // 3. Send Pickup Route to Driver
             const pickupRoute = await getRouteData(data.driverLat, data.driverLng, `${data.pickupLat},${data.pickupLng}`);
             socket.emit('ride_started_info', { 
                 pickupPolyline: pickupRoute ? pickupRoute.polyline : null, 
                 totalFare: data.fare 
             });
 
-        } catch (err) { console.error("Accept Ride Error:", err.message); }
+        } catch (err) { 
+            console.error("Accept Ride Error:", err.message); 
+        }
     });
 
     // 5. CANCEL RIDE
