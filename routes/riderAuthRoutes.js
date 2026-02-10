@@ -75,26 +75,31 @@ router.post('/reset-password', async (req, res) => {
 });
 
 // 🟢 4. FIREBASE LOGIN / SIGNUP (The One We Need!)
+// 🟢 FIXED: Handle Duplicate Key Error Gracefully
 router.post('/firebase-login', async (req, res) => {
-    // 🟢 Accepting 'name' from the Flutter App
     const { phone, firebase_uid, name } = req.body; 
 
     try {
-        // Use 'db', not 'pool'
-        const userCheck = await db.query("SELECT * FROM riders WHERE phone = $1", [phone]);
+        // 1. Try to find the user by PHONE first
+        let userCheck = await db.query("SELECT * FROM riders WHERE phone = $1", [phone]);
+
+        // 2. If not found by phone, try to find by FIREBASE_UID
+        if (userCheck.rows.length === 0) {
+            userCheck = await db.query("SELECT * FROM riders WHERE firebase_uid = $1", [firebase_uid]);
+        }
 
         if (userCheck.rows.length > 0) {
-            // LOGIN: User exists, return their data
+            // ✅ USER EXISTS -> LOGIN
             const user = userCheck.rows[0];
 
-            // Optional: Update Firebase UID if it was missing before
-            if (!user.firebase_uid && firebase_uid) {
-                await db.query("UPDATE riders SET firebase_uid = $1 WHERE phone = $2", [firebase_uid, phone]);
+            // If the user exists but doesn't have the UID saved yet, update it
+            if (!user.firebase_uid || user.firebase_uid !== firebase_uid) {
+                await db.query("UPDATE riders SET firebase_uid = $1 WHERE id = $2", [firebase_uid, user.id]);
             }
 
             res.json({ success: true, user: user, msg: "Login successful" });
         } else {
-            // SIGN UP: Create new user with the Name they entered
+            // 🆕 USER DOES NOT EXIST -> REGISTER
             const actualName = (name && name.trim() !== "") ? name : "New Rider";
             
             const newUser = await db.query(
@@ -104,6 +109,15 @@ router.post('/firebase-login', async (req, res) => {
             res.json({ success: true, user: newUser.rows[0], msg: "Account Created" });
         }
     } catch (err) {
+        // 🟢 SPECIAL HANDLER: If we hit a race condition or duplicate error, just login the user
+        if (err.code === '23505') { // Postgres code for Unique Violation
+            console.log("⚠️ Duplicate ID detected, logging in existing user...");
+            const existingUser = await db.query("SELECT * FROM riders WHERE firebase_uid = $1 OR phone = $2", [firebase_uid, phone]);
+            if (existingUser.rows.length > 0) {
+                 return res.json({ success: true, user: existingUser.rows[0], msg: "Login successful (Recovered)" });
+            }
+        }
+
         console.error("Firebase Login Error:", err.message);
         res.status(500).json({ success: false, msg: "Server Error" });
     }
