@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcrypt');
-const db = require('../config/db'); // Adjust path to your db config
+const db = require('../config/db'); // 🟢 Database Connection
 
-// 🟢 1. REGISTER (Updated with Error Handling)
+// 🟢 1. REGISTER (Standard Email/Pass)
 router.post('/register', async (req, res) => {
     try {
         const { name, phone, email, gender, password } = req.body;
@@ -22,7 +22,7 @@ router.post('/register', async (req, res) => {
         res.json({ success: true, user: result.rows[0] });
 
     } catch (err) {
-        // 🟢 FIX: Handle Duplicate Phone Number
+        // Handle Duplicate Phone Number
         if (err.code === '23505') { 
             return res.json({ success: false, msg: "This phone number is already registered. Please login." });
         }
@@ -31,7 +31,7 @@ router.post('/register', async (req, res) => {
     }
 });
 
-// 🟢 2. LOGIN (Existing)
+// 🟢 2. LOGIN (Standard Email/Pass)
 router.post('/login', async (req, res) => {
     try {
         const { phone, password } = req.body;
@@ -48,8 +48,7 @@ router.post('/login', async (req, res) => {
     }
 });
 
-// 🟢 3. RESET PASSWORD (New Feature)
-// Allows resetting password using JUST the phone number
+// 🟢 3. RESET PASSWORD
 router.post('/reset-password', async (req, res) => {
     try {
         const { phone, newPassword } = req.body;
@@ -74,34 +73,43 @@ router.post('/reset-password', async (req, res) => {
         res.status(500).json({ success: false, error: "Server error" });
     }
 });
-// 🟢 NEW: LOGIN WITH FIREBASE (No OTP logic needed here)
+
+// 🟢 4. FIREBASE LOGIN / SIGNUP (The One We Need!)
 router.post('/firebase-login', async (req, res) => {
-    // 🟢 NOW ACCEPTING 'name' FROM THE APP
+    // 🟢 Accepting 'name' from the Flutter App
     const { phone, firebase_uid, name } = req.body; 
 
     try {
-        const userCheck = await pool.query("SELECT * FROM riders WHERE phone = $1", [phone]);
+        // Use 'db', not 'pool'
+        const userCheck = await db.query("SELECT * FROM riders WHERE phone = $1", [phone]);
 
         if (userCheck.rows.length > 0) {
             // LOGIN: User exists, return their data
-            // (We ignore the name sent from app during login to preserve database data)
-            res.json({ success: true, user: userCheck.rows[0] });
+            const user = userCheck.rows[0];
+
+            // Optional: Update Firebase UID if it was missing before
+            if (!user.firebase_uid && firebase_uid) {
+                await db.query("UPDATE riders SET firebase_uid = $1 WHERE phone = $2", [firebase_uid, phone]);
+            }
+
+            res.json({ success: true, user: user, msg: "Login successful" });
         } else {
             // SIGN UP: Create new user with the Name they entered
-            const actualName = name && name.trim() !== "" ? name : "New Rider";
+            const actualName = (name && name.trim() !== "") ? name : "New Rider";
             
-            const newUser = await pool.query(
+            const newUser = await db.query(
                 "INSERT INTO riders (name, phone, firebase_uid) VALUES ($1, $2, $3) RETURNING *",
                 [actualName, phone, firebase_uid]
             );
-            res.json({ success: true, user: newUser.rows[0] });
+            res.json({ success: true, user: newUser.rows[0], msg: "Account Created" });
         }
     } catch (err) {
-        console.error(err.message);
+        console.error("Firebase Login Error:", err.message);
         res.status(500).json({ success: false, msg: "Server Error" });
     }
 });
-// 🟢 GET RIDE HISTORY
+
+// 🟢 5. GET RIDE HISTORY
 router.get('/history/:riderId', async (req, res) => {
     try {
         const { riderId } = req.params;
@@ -118,37 +126,5 @@ router.get('/history/:riderId', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
-// 🟢 API: Login or Register via Firebase Phone
-router.post('/firebase-login', async (req, res) => {
-    const { phone, firebase_uid } = req.body;
 
-    try {
-        // 1. Check if user exists
-        const userCheck = await pool.query("SELECT * FROM riders WHERE phone = $1", [phone]);
-
-        if (userCheck.rows.length > 0) {
-            // USER EXISTS -> Login
-            const user = userCheck.rows[0];
-            
-            // Optional: Update Firebase UID if missing
-            if (!user.firebase_uid && firebase_uid) {
-                await pool.query("UPDATE riders SET firebase_uid = $1 WHERE phone = $2", [firebase_uid, phone]);
-            }
-
-            return res.json({ success: true, user: user, msg: "Login successful" });
-        } else {
-            // USER NEW -> Register (Create new account automatically)
-            // Note: Password is NULL because they used OTP
-            const newUser = await pool.query(
-                "INSERT INTO riders (name, phone, firebase_uid) VALUES ($1, $2, $3) RETURNING *",
-                ["New Rider", phone, firebase_uid]
-            );
-
-            return res.json({ success: true, user: newUser.rows[0], msg: "Account created" });
-        }
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).json({ success: false, msg: "Server Error" });
-    }
-});
 module.exports = router;
