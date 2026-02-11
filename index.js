@@ -224,7 +224,7 @@ io.on('connection', (socket) => {
                  FROM drivers 
                  WHERE is_online = true 
                  AND id NOT IN (SELECT driver_id FROM rides WHERE status IN ('ACCEPTED', 'ARRIVED', 'ON_TRIP') AND driver_id IS NOT NULL)
-                 AND ST_DWithin(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, 50000)`, 
+                 AND ST_DWithin(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, 5000)`, 
                 [data.pickupLng, data.pickupLat]
             );
 
