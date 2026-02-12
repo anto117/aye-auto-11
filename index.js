@@ -147,7 +147,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 3. REQUEST RIDE (New Cascading Logic)
+    // 🟢 3. REQUEST RIDE (Starts with 2km)
     socket.on('request_ride', async (data) => {
         console.log(`🚀 New Ride Request from Rider ${data.riderId}`);
 
@@ -166,8 +166,8 @@ io.on('connection', (socket) => {
             const riderSocketId = socket.id;
             const ridePayload = { ...data, ride_id: rideId, rider_id: riderSocketId, riderPhone: riderPhone };
 
-            // 2. Start Phase 1 Search (3km Radius)
-            startDriverSearch(rideId, ridePayload, 3000, [], riderSocketId);
+            // 2. Start Phase 1 Search (2km Radius)
+            startDriverSearch(rideId, ridePayload, 2000, [], riderSocketId);
 
         } catch (err) { console.error("Request Error:", err); }
     });
@@ -218,16 +218,17 @@ io.on('connection', (socket) => {
 
             // 🟢 CASCADING LOGIC (TIMERS)
             
-            // Phase 1 (3000m) -> Wait 15s -> Go to Phase 2
-            if (radius === 3000) {
+            // Phase 1 (2000m) -> Wait 15s -> Go to Phase 2 (5000m)
+            if (radius === 2000) {
                 const timer = setTimeout(() => {
-                    console.log("⏰ Phase 1 ended. Expanding to 6km...");
-                    startDriverSearch(rideId, rideData, 6000, notifiedDriverIds, riderSocketId);
+                    console.log("⏰ Phase 1 ended. Expanding to 5km...");
+                    // 2000m + 3000m = 5000m
+                    startDriverSearch(rideId, rideData, 5000, notifiedDriverIds, riderSocketId);
                 }, 15000); 
                 rideTimers.set(rideId, timer);
             } 
-            // Phase 2 (6000m) -> Wait 15s -> Timeout
-            else if (radius === 6000) {
+            // Phase 2 (5000m) -> Wait 15s -> Timeout
+            else if (radius === 5000) {
                 const timer = setTimeout(async () => {
                     console.log("⏰ Phase 2 ended. No drivers found.");
                     
