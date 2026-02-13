@@ -5,6 +5,7 @@ const axios = require('axios');
 const { Server } = require("socket.io");
 const db = require('./config/db'); 
 const admin = require("firebase-admin"); 
+const path = require('path'); // Required for Admin Panel
 require('dotenv').config();
 
 // 🟢 INITIALIZE FIREBASE
@@ -32,7 +33,38 @@ const server = http.createServer(app);
 app.use(cors()); 
 app.use(express.json()); 
 
-// --- ROUTES ---
+// 🟢 SERVE ADMIN PANEL
+app.use(express.static(path.join(__dirname, 'public')));
+
+// --- ADMIN API ROUTES ---
+app.get('/api/admin/drivers', async (req, res) => {
+    try {
+        const result = await db.query("SELECT id, name, phone, vehicle_details, is_verified, is_online FROM drivers ORDER BY id DESC");
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/admin/verify-driver', async (req, res) => {
+    const { driverId, status } = req.body; 
+    try {
+        await db.query("UPDATE drivers SET is_verified = $1 WHERE id = $2", [status, driverId]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/rides', async (req, res) => {
+    try {
+        const result = await db.query(`
+            SELECT r.id, r.fare, r.status, d.name as driver_name 
+            FROM rides r 
+            LEFT JOIN drivers d ON r.driver_id = d.id 
+            ORDER BY r.id DESC LIMIT 50
+        `);
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// --- APP ROUTES ---
 const authRoutes = require('./routes/authRoutes'); 
 const driverRoutes = require('./routes/driverRoutes'); 
 const riderAuthRoutes = require('./routes/riderAuthRoutes'); 
