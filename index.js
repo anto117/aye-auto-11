@@ -138,6 +138,12 @@ io.on('connection', (socket) => {
                  WHERE id = $6`,
                 [data.lng, data.lat, data.heading, socket.id, data.fcmToken, data.driverId]
             );
+            io.emit('admin_driver_update', { 
+                id: data.driverId, 
+                lat: data.lat, 
+                lng: data.lng, 
+                heading: data.heading 
+            });
         } catch (err) {
             console.error("Geo Update Error:", err.message);
         }
