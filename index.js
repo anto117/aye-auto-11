@@ -126,8 +126,10 @@ io.on('connection', (socket) => {
     console.log(`⚡ Client Connected: ${socket.id}`);
 
     // 1. DRIVER LOCATION
+    // 1. DRIVER LOCATION
     socket.on('driver_location', async (data) => {
         try {
+            // Update Driver Table
             await db.query(
                 `UPDATE drivers 
                  SET location = ST_SetSRID(ST_MakePoint($1, $2), 4326), 
@@ -138,12 +140,32 @@ io.on('connection', (socket) => {
                  WHERE id = $6`,
                 [data.lng, data.lat, data.heading, socket.id, data.fcmToken, data.driverId]
             );
+
+            // 🟢 NEW: Check if this driver is currently on a ride
+            const activeRide = await db.query(
+                `SELECT id, status, destination FROM rides 
+                 WHERE driver_id = $1 AND status IN ('ACCEPTED', 'ARRIVED', 'ON_TRIP')`,
+                [data.driverId]
+            );
+
+            let driverStatus = "Free";
+            let currentRideDest = null;
+
+            if (activeRide.rows.length > 0) {
+                driverStatus = activeRide.rows[0].status; // e.g. "ACCEPTED"
+                currentRideDest = activeRide.rows[0].destination;
+            }
+
+            // 🟢 BROADCAST TO ADMIN: Include Status & Destination
             io.emit('admin_driver_update', { 
                 id: data.driverId, 
                 lat: data.lat, 
                 lng: data.lng, 
-                heading: data.heading 
+                heading: data.heading,
+                status: driverStatus,
+                destination: currentRideDest
             });
+
         } catch (err) {
             console.error("Geo Update Error:", err.message);
         }

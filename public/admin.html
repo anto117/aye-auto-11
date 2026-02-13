@@ -16,15 +16,21 @@
         
         /* Map Styles */
         #map { height: 80vh; width: 100%; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        .driver-icon { font-size: 20px; text-align: center; }
+        .driver-icon { font-size: 24px; text-align: center; display: block; }
         
         /* Table Styles */
         .card { border: none; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
         .status-badge { padding: 5px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: bold; text-transform: uppercase; }
+        
+        /* Ride Status Colors */
         .bg-completed { background: #d4edda; color: #155724; }
         .bg-timeout { background: #f8d7da; color: #721c24; }
         .bg-requested { background: #fff3cd; color: #856404; }
-        .bg-accepted { background: #cce5ff; color: #004085; }
+        .bg-accepted { background: #cce5ff; color: #004085; } /* Blue for Active Ride */
+        
+        /* Driver Status Colors */
+        .driver-free { color: #28a745; text-shadow: 0 0 5px #28a745; } /* Green Glow */
+        .driver-busy { color: #dc3545; text-shadow: 0 0 5px #dc3545; } /* Red Glow */
     </style>
 </head>
 <body>
@@ -44,19 +50,33 @@
         </div>
 
         <div id="drivers-section" style="display:none;">
-            <h2 class="mb-4">Driver Management</h2>
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2>Driver Management</h2>
+                <button class="btn btn-primary" onclick="loadDrivers()">🔄 Refresh List</button>
+            </div>
+            
             <div class="card p-4">
-                <table class="table align-middle">
+                <table class="table align-middle table-hover">
                     <thead class="table-light">
-                        <tr><th>ID</th><th>Name</th><th>Phone</th><th>Status</th><th>Verify</th></tr>
+                        <tr>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Phone</th>
+                            <th>Status</th> <th>Verify</th>
+                        </tr>
                     </thead>
-                    <tbody id="drivers-table"></tbody>
+                    <tbody id="drivers-table">
+                        <tr><td colspan="5" class="text-center">Loading drivers...</td></tr>
+                    </tbody>
                 </table>
             </div>
         </div>
 
         <div id="rides-section" style="display:none;">
-            <h2 class="mb-4">Ride History</h2>
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2>Ride History</h2>
+                <button class="btn btn-primary" onclick="loadRides()">🔄 Refresh List</button>
+            </div>
             <div class="card p-4">
                 <table class="table align-middle">
                     <thead class="table-light">
@@ -72,46 +92,62 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
     <script>
-        const API_URL = ""; // Auto-detects since hosted on same server
+        const API_URL = ""; 
         let map, markers = {};
 
-        // 🟢 1. INITIALIZE MAP (Centered on Kerala)
+        // 🟢 1. INITIALIZE MAP
         function initMap() {
-            map = L.map('map').setView([9.5916, 76.5222], 10); // Default: Kottayam/Kerala
+            map = L.map('map').setView([9.5916, 76.5222], 12); // Centered on Kerala
             L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
                 attribution: '© OpenStreetMap contributors'
             }).addTo(map);
         }
 
-        // 🟢 2. CONNECT SOCKET FOR LIVE TRACKING
+        // 🟢 2. SOCKET CONNECTION (LIVE UPDATES)
         const socket = io();
 
         socket.on('connect', () => console.log("✅ Admin Connected to Socket"));
 
+        // When a driver moves
         socket.on('admin_driver_update', (data) => {
-            console.log("📍 Driver Moved:", data);
+            console.log("📍 Live Update:", data);
             updateDriverMarker(data);
+            
+            // Optional: If we are on the Driver tab, we could live-update the status row too
+            // But usually refreshing the table is safer for admin performance.
         });
 
         function updateDriverMarker(data) {
             if (!map) return;
 
-            // Custom Icon for Auto Rickshaw
+            // Determine Icon Color based on Status
+            // Free = Green, On Ride = Red
+            let iconColorClass = (data.status === 'Free') ? 'driver-free' : 'driver-busy';
+            
+            // Build Popup Text
+            let popupContent = `<b>🛺 ${data.id}</b><br>`;
+            if (data.status === 'Free') {
+                popupContent += `<span class="badge bg-success">Free</span>`;
+            } else {
+                popupContent += `<span class="badge bg-primary">On Ride</span><br>`;
+                popupContent += `To: <b>${data.destination || 'Unknown'}</b>`;
+            }
+
             const autoIcon = L.divIcon({
-                className: 'driver-icon',
-                html: '🛺',
+                className: 'custom-div-icon',
+                html: `<div style='font-size: 24px;' class='${iconColorClass}'>🛺</div>`,
                 iconSize: [30, 30],
                 iconAnchor: [15, 15]
             });
 
             if (markers[data.id]) {
-                // Update existing marker
                 markers[data.id].setLatLng([data.lat, data.lng]);
+                markers[data.id].setIcon(autoIcon);
+                markers[data.id].setPopupContent(popupContent);
             } else {
-                // Create new marker
                 markers[data.id] = L.marker([data.lat, data.lng], {icon: autoIcon})
                     .addTo(map)
-                    .bindPopup(`<b>Driver #${data.id}</b><br>Online`);
+                    .bindPopup(popupContent);
             }
         }
 
@@ -123,12 +159,17 @@
             tbody.innerHTML = '';
 
             data.forEach(d => {
+                // Determine Online Status
+                let onlineBadge = d.is_online 
+                    ? '<span class="badge bg-success">Online 🟢</span>' 
+                    : '<span class="badge bg-secondary">Offline ⚫</span>';
+
                 tbody.innerHTML += `
                     <tr>
-                        <td>${d.id}</td>
+                        <td><b>#${d.id}</b></td>
                         <td>${d.name}</td>
                         <td>${d.phone}</td>
-                        <td>${d.is_verified ? '<span class="badge bg-success">Verified</span>' : '<span class="badge bg-warning text-dark">Pending</span>'}</td>
+                        <td>${onlineBadge}</td>
                         <td>
                             ${!d.is_verified ? 
                                 `<button class="btn btn-sm btn-outline-success" onclick="verifyDriver(${d.id}, true)">Approve</button>` : 
@@ -151,7 +192,7 @@
                 if(r.status === 'COMPLETED') badgeClass = 'bg-completed';
                 if(r.status === 'TIMEOUT' || r.status === 'CANCELLED') badgeClass = 'bg-timeout';
                 if(r.status === 'REQUESTED') badgeClass = 'bg-requested';
-                if(r.status === 'ACCEPTED') badgeClass = 'bg-accepted';
+                if(r.status === 'ACCEPTED' || r.status === 'ARRIVED' || r.status === 'ON_TRIP') badgeClass = 'bg-accepted';
 
                 tbody.innerHTML += `
                     <tr>
@@ -187,12 +228,12 @@
             document.getElementById(`link-${section}`).classList.add('active');
 
             if (section === 'map' && !map) initMap();
-            if (section === 'map' && map) setTimeout(() => map.invalidateSize(), 100); // Fix map render issue
+            if (section === 'map' && map) setTimeout(() => map.invalidateSize(), 100); 
             if (section === 'drivers') loadDrivers();
             if (section === 'rides') loadRides();
         }
 
-        // Initialize Map by default
+        // Initialize
         initMap();
     </script>
 </body>
