@@ -3,34 +3,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aye Admin - Live Tracking</title>
+    <title>Aye Admin - God Mode</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { background-color: #f4f6f9; overflow-x: hidden; }
+        body { background-color: #f4f6f9; overflow-x: hidden; font-family: 'Segoe UI', sans-serif; }
         .sidebar { height: 100vh; background: #1a1d21; color: white; padding-top: 20px; position: fixed; width: 250px; z-index: 1000; }
         .sidebar h3 { color: #FBC02D; font-weight: 900; margin-bottom: 30px; letter-spacing: 1px; }
         .sidebar a { color: #aaa; text-decoration: none; display: block; padding: 15px 25px; border-left: 4px solid transparent; transition: 0.3s; }
         .sidebar a:hover, .sidebar a.active { background: #2c3036; color: white; border-left-color: #FBC02D; }
         .content { margin-left: 250px; padding: 30px; }
         
-        /* Map Styles */
         #map { height: 80vh; width: 100%; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        .driver-icon { font-size: 24px; text-align: center; display: block; }
-        
-        /* Table Styles */
         .card { border: none; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
-        .status-badge { padding: 5px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: bold; text-transform: uppercase; }
         
-        /* Ride Status Colors */
+        .status-badge { padding: 5px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: bold; text-transform: uppercase; }
         .bg-completed { background: #d4edda; color: #155724; }
         .bg-timeout { background: #f8d7da; color: #721c24; }
-        .bg-requested { background: #fff3cd; color: #856404; }
-        .bg-accepted { background: #cce5ff; color: #004085; } /* Blue for Active Ride */
+        .bg-requested { background: #fff3cd; color: #856404; animation: pulse 2s infinite; }
+        .bg-accepted { background: #cce5ff; color: #004085; }
         
-        /* Driver Status Colors */
-        .driver-free { color: #28a745; text-shadow: 0 0 5px #28a745; } /* Green Glow */
-        .driver-busy { color: #dc3545; text-shadow: 0 0 5px #dc3545; } /* Red Glow */
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
+        
+        .driver-free { color: #28a745; text-shadow: 0 0 5px #28a745; font-size: 24px; }
+        .driver-busy { color: #dc3545; text-shadow: 0 0 5px #dc3545; font-size: 24px; }
     </style>
 </head>
 <body>
@@ -38,6 +34,7 @@
     <div class="sidebar text-center text-md-start">
         <h3 class="px-4">🛺 Aye Admin</h3>
         <a href="#" id="link-map" class="active" onclick="showSection('map')">🗺️ Live Map</a>
+        <a href="#" id="link-requests" onclick="showSection('requests')">🔔 Live Requests</a>
         <a href="#" id="link-drivers" onclick="showSection('drivers')">👨‍✈️ Drivers</a>
         <a href="#" id="link-rides" onclick="showSection('rides')">🚕 Recent Rides</a>
     </div>
@@ -45,29 +42,38 @@
     <div class="content">
         
         <div id="map-section">
-            <h2 class="mb-4">Live Driver Tracking</h2>
+            <h2 class="mb-4">Live Tracking</h2>
             <div id="map"></div>
+        </div>
+
+        <div id="requests-section" style="display:none;">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2>🔔 Pending Requests</h2>
+                <button class="btn btn-warning" onclick="loadPendingRides()">🔄 Refresh</button>
+            </div>
+            <div class="card p-4">
+                <table class="table align-middle table-hover">
+                    <thead class="table-light">
+                        <tr><th>ID</th><th>Rider</th><th>Destination</th><th>Fare</th><th>Status</th><th>Location</th></tr>
+                    </thead>
+                    <tbody id="requests-table">
+                        <tr><td colspan="6" class="text-center">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <div id="drivers-section" style="display:none;">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2>Driver Management</h2>
-                <button class="btn btn-primary" onclick="loadDrivers()">🔄 Refresh List</button>
+                <button class="btn btn-primary" onclick="loadDrivers()">🔄 Refresh</button>
             </div>
-            
             <div class="card p-4">
                 <table class="table align-middle table-hover">
                     <thead class="table-light">
-                        <tr>
-                            <th>ID</th>
-                            <th>Name</th>
-                            <th>Phone</th>
-                            <th>Status</th> <th>Verify</th>
-                        </tr>
+                        <tr><th>ID</th><th>Name</th><th>Phone</th><th>Status</th><th>Verify</th></tr>
                     </thead>
-                    <tbody id="drivers-table">
-                        <tr><td colspan="5" class="text-center">Loading drivers...</td></tr>
-                    </tbody>
+                    <tbody id="drivers-table"></tbody>
                 </table>
             </div>
         </div>
@@ -75,7 +81,7 @@
         <div id="rides-section" style="display:none;">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2>Ride History</h2>
-                <button class="btn btn-primary" onclick="loadRides()">🔄 Refresh List</button>
+                <button class="btn btn-primary" onclick="loadRides()">🔄 Refresh</button>
             </div>
             <div class="card p-4">
                 <table class="table align-middle">
@@ -93,147 +99,149 @@
     
     <script>
         const API_URL = ""; 
-        let map, markers = {};
+        let map, markers = {}, pickupMarker;
 
         // 🟢 1. INITIALIZE MAP
         function initMap() {
-            map = L.map('map').setView([9.5916, 76.5222], 12); // Centered on Kerala
+            if(map) return;
+            map = L.map('map').setView([9.5916, 76.5222], 12); 
             L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
                 attribution: '© OpenStreetMap contributors'
             }).addTo(map);
         }
 
-        // 🟢 2. SOCKET CONNECTION (LIVE UPDATES)
+        // 🟢 2. LIVE UPDATES
         const socket = io();
-
-        socket.on('connect', () => console.log("✅ Admin Connected to Socket"));
-
-        // When a driver moves
-        socket.on('admin_driver_update', (data) => {
-            console.log("📍 Live Update:", data);
-            updateDriverMarker(data);
-            
-            // Optional: If we are on the Driver tab, we could live-update the status row too
-            // But usually refreshing the table is safer for admin performance.
-        });
+        socket.on('admin_driver_update', (data) => updateDriverMarker(data));
 
         function updateDriverMarker(data) {
             if (!map) return;
-
-            // Determine Icon Color based on Status
-            // Free = Green, On Ride = Red
             let iconColorClass = (data.status === 'Free') ? 'driver-free' : 'driver-busy';
-            
-            // Build Popup Text
-            let popupContent = `<b>🛺 ${data.id}</b><br>`;
-            if (data.status === 'Free') {
-                popupContent += `<span class="badge bg-success">Free</span>`;
-            } else {
-                popupContent += `<span class="badge bg-primary">On Ride</span><br>`;
-                popupContent += `To: <b>${data.destination || 'Unknown'}</b>`;
-            }
+            let popupContent = `<b>🛺 ${data.id}</b><br>${data.status === 'Free' ? '<span class="badge bg-success">Free</span>' : '<span class="badge bg-danger">On Ride</span>'}`;
 
             const autoIcon = L.divIcon({
                 className: 'custom-div-icon',
-                html: `<div style='font-size: 24px;' class='${iconColorClass}'>🛺</div>`,
+                html: `<div class='${iconColorClass}'>🛺</div>`,
                 iconSize: [30, 30],
                 iconAnchor: [15, 15]
             });
 
             if (markers[data.id]) {
-                markers[data.id].setLatLng([data.lat, data.lng]);
-                markers[data.id].setIcon(autoIcon);
-                markers[data.id].setPopupContent(popupContent);
+                markers[data.id].setLatLng([data.lat, data.lng]).setIcon(autoIcon).setPopupContent(popupContent);
             } else {
-                markers[data.id] = L.marker([data.lat, data.lng], {icon: autoIcon})
-                    .addTo(map)
-                    .bindPopup(popupContent);
+                markers[data.id] = L.marker([data.lat, data.lng], {icon: autoIcon}).addTo(map).bindPopup(popupContent);
             }
         }
 
-        // 🟢 3. API FUNCTIONS
-        async function loadDrivers() {
-            const res = await fetch(`${API_URL}/api/admin/drivers`);
-            const data = await res.json();
-            const tbody = document.getElementById('drivers-table');
-            tbody.innerHTML = '';
+        // 🟢 3. FETCH PENDING RIDES (NEW)
+        async function loadPendingRides() {
+            try {
+                const res = await fetch(`${API_URL}/api/admin/pending-rides`);
+                const data = await res.json();
+                const tbody = document.getElementById('requests-table');
+                tbody.innerHTML = '';
 
-            data.forEach(d => {
-                // Determine Online Status
-                let onlineBadge = d.is_online 
-                    ? '<span class="badge bg-success">Online 🟢</span>' 
-                    : '<span class="badge bg-secondary">Offline ⚫</span>';
+                if (data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">No pending requests</td></tr>';
+                    return;
+                }
 
-                tbody.innerHTML += `
-                    <tr>
-                        <td><b>#${d.id}</b></td>
-                        <td>${d.name}</td>
-                        <td>${d.phone}</td>
-                        <td>${onlineBadge}</td>
-                        <td>
-                            ${!d.is_verified ? 
-                                `<button class="btn btn-sm btn-outline-success" onclick="verifyDriver(${d.id}, true)">Approve</button>` : 
-                                `<button class="btn btn-sm btn-outline-danger" onclick="verifyDriver(${d.id}, false)">Ban</button>`
-                            }
-                        </td>
-                    </tr>
-                `;
-            });
+                data.forEach(r => {
+                    tbody.innerHTML += `
+                        <tr>
+                            <td><b>#${r.id}</b></td>
+                            <td>${r.rider_name || 'Guest'} <br> <small>${r.rider_phone || ''}</small></td>
+                            <td>${r.destination}</td>
+                            <td>₹${r.fare}</td>
+                            <td><span class="status-badge bg-requested">Pending</span></td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary" onclick="viewLocation(${r.pickup_lat}, ${r.pickup_lng}, '${r.rider_name}')">
+                                    📍 View Map
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                });
+            } catch (err) { console.error(err); }
         }
 
+        function viewLocation(lat, lng, name) {
+            showSection('map');
+            map.setView([lat, lng], 15);
+            if(pickupMarker) map.removeLayer(pickupMarker);
+            pickupMarker = L.marker([lat, lng]).addTo(map)
+                .bindPopup(`<b>🙋‍♂️ ${name || 'User'}</b><br>Pickup Location`).openPopup();
+        }
+
+        // 🟢 4. LOAD DRIVERS
+        async function loadDrivers() {
+            try {
+                const res = await fetch(`${API_URL}/api/admin/drivers`);
+                if (!res.ok) throw new Error("Failed");
+                const data = await res.json();
+                if (!Array.isArray(data)) return;
+
+                const tbody = document.getElementById('drivers-table');
+                tbody.innerHTML = '';
+
+                data.forEach(d => {
+                    let onlineBadge = d.is_online ? '<span class="badge bg-success">Online</span>' : '<span class="badge bg-secondary">Offline</span>';
+                    tbody.innerHTML += `
+                        <tr>
+                            <td><b>#${d.id}</b></td>
+                            <td>${d.name}</td>
+                            <td>${d.phone}</td>
+                            <td>${onlineBadge}</td>
+                            <td>
+                                ${!d.is_verified ? 
+                                    `<button class="btn btn-sm btn-success" onclick="verifyDriver(${d.id}, true)">Approve</button>` : 
+                                    `<button class="btn btn-sm btn-danger" onclick="verifyDriver(${d.id}, false)">Ban</button>`
+                                }
+                            </td>
+                        </tr>
+                    `;
+                });
+            } catch (err) { console.error(err); }
+        }
+
+        // 🟢 5. LOAD RIDES
         async function loadRides() {
-            const res = await fetch(`${API_URL}/api/admin/rides`);
-            const data = await res.json();
-            const tbody = document.getElementById('rides-table');
-            tbody.innerHTML = '';
+            try {
+                const res = await fetch(`${API_URL}/api/admin/rides`);
+                const data = await res.json();
+                const tbody = document.getElementById('rides-table');
+                tbody.innerHTML = '';
 
-            data.forEach(r => {
-                let badgeClass = 'bg-secondary';
-                if(r.status === 'COMPLETED') badgeClass = 'bg-completed';
-                if(r.status === 'TIMEOUT' || r.status === 'CANCELLED') badgeClass = 'bg-timeout';
-                if(r.status === 'REQUESTED') badgeClass = 'bg-requested';
-                if(r.status === 'ACCEPTED' || r.status === 'ARRIVED' || r.status === 'ON_TRIP') badgeClass = 'bg-accepted';
-
-                tbody.innerHTML += `
-                    <tr>
-                        <td>#${r.id}</td>
-                        <td>${r.driver_name || '<span class="text-muted">--</span>'}</td>
-                        <td>₹${r.fare}</td>
-                        <td><span class="status-badge ${badgeClass}">${r.status}</span></td>
-                    </tr>
-                `;
-            });
+                data.forEach(r => {
+                    let badge = r.status === 'COMPLETED' ? 'bg-completed' : (r.status === 'REQUESTED' ? 'bg-requested' : 'bg-accepted');
+                    tbody.innerHTML += `<tr><td>#${r.id}</td><td>${r.driver_name || '--'}</td><td>₹${r.fare}</td><td><span class="status-badge ${badge}">${r.status}</span></td></tr>`;
+                });
+            } catch (err) { console.error(err); }
         }
 
         async function verifyDriver(id, status) {
-            if(!confirm(status ? "Approve this driver?" : "Ban this driver?")) return;
+            if(!confirm(status ? "Approve?" : "Ban?")) return;
             await fetch(`${API_URL}/api/admin/verify-driver`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ driverId: id, status: status })
             });
             loadDrivers();
         }
 
-        // 🟢 4. NAVIGATION LOGIC
         function showSection(section) {
-            // Hide all
-            ['map', 'drivers', 'rides'].forEach(id => {
+            ['map', 'requests', 'drivers', 'rides'].forEach(id => {
                 document.getElementById(`${id}-section`).style.display = 'none';
                 document.getElementById(`link-${id}`).classList.remove('active');
             });
-
-            // Show selected
             document.getElementById(`${section}-section`).style.display = 'block';
             document.getElementById(`link-${section}`).classList.add('active');
 
-            if (section === 'map' && !map) initMap();
-            if (section === 'map' && map) setTimeout(() => map.invalidateSize(), 100); 
+            if (section === 'map') { initMap(); setTimeout(() => map.invalidateSize(), 100); }
+            if (section === 'requests') loadPendingRides();
             if (section === 'drivers') loadDrivers();
             if (section === 'rides') loadRides();
         }
 
-        // Initialize
         initMap();
     </script>
 </body>

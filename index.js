@@ -37,9 +37,27 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- ADMIN API ROUTES ---
+// 🟢 ADMIN API: Get All Drivers (Fixed)
 app.get('/api/admin/drivers', async (req, res) => {
     try {
-        const result = await db.query("SELECT id, name, phone, vehicle_details, is_verified, is_online FROM drivers ORDER BY id DESC");
+        // Removed 'vehicle_details' to prevent 500 error if column is missing
+        const result = await db.query("SELECT id, name, phone, is_verified, is_online FROM drivers ORDER BY id DESC");
+        res.json(result.rows);
+    } catch (err) { 
+        console.error("Admin Driver Fetch Error:", err.message); // Print error to console
+        res.status(500).json({ error: err.message }); 
+    }
+});
+// 🟢 ADMIN API: Get Pending/Live Requests
+app.get('/api/admin/pending-rides', async (req, res) => {
+    try {
+        const result = await db.query(`
+            SELECT r.id, r.rider_id, r.pickup_lat, r.pickup_lng, r.destination, r.fare, r.status, riders.name as rider_name, riders.phone as rider_phone
+            FROM rides r
+            LEFT JOIN riders ON r.rider_id = riders.id
+            WHERE r.status = 'REQUESTED'
+            ORDER BY r.id DESC
+        `);
         res.json(result.rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
