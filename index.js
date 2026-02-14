@@ -5,7 +5,7 @@ const axios = require('axios');
 const { Server } = require("socket.io");
 const db = require('./config/db'); 
 const admin = require("firebase-admin"); 
-const path = require('path'); // Required for Admin Panel
+const path = require('path'); 
 require('dotenv').config();
 
 // 🟢 INITIALIZE FIREBASE
@@ -37,18 +37,16 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- ADMIN API ROUTES ---
-// 🟢 ADMIN API: Get All Drivers (Fixed)
 app.get('/api/admin/drivers', async (req, res) => {
     try {
-        // Removed 'vehicle_details' to prevent 500 error if column is missing
         const result = await db.query("SELECT id, name, phone, is_verified, is_online FROM drivers ORDER BY id DESC");
         res.json(result.rows);
     } catch (err) { 
-        console.error("Admin Driver Fetch Error:", err.message); // Print error to console
+        console.error("Admin Driver Fetch Error:", err.message);
         res.status(500).json({ error: err.message }); 
     }
 });
-// 🟢 ADMIN API: Get Pending/Live Requests
+
 app.get('/api/admin/pending-rides', async (req, res) => {
     try {
         const result = await db.query(`
@@ -144,10 +142,8 @@ io.on('connection', (socket) => {
     console.log(`⚡ Client Connected: ${socket.id}`);
 
     // 1. DRIVER LOCATION
-    // 1. DRIVER LOCATION
     socket.on('driver_location', async (data) => {
         try {
-            // Update Driver Table
             await db.query(
                 `UPDATE drivers 
                  SET location = ST_SetSRID(ST_MakePoint($1, $2), 4326), 
@@ -159,7 +155,6 @@ io.on('connection', (socket) => {
                 [data.lng, data.lat, data.heading, socket.id, data.fcmToken, data.driverId]
             );
 
-            // 🟢 NEW: Check if this driver is currently on a ride
             const activeRide = await db.query(
                 `SELECT id, status, destination FROM rides 
                  WHERE driver_id = $1 AND status IN ('ACCEPTED', 'ARRIVED', 'ON_TRIP')`,
@@ -170,11 +165,10 @@ io.on('connection', (socket) => {
             let currentRideDest = null;
 
             if (activeRide.rows.length > 0) {
-                driverStatus = activeRide.rows[0].status; // e.g. "ACCEPTED"
+                driverStatus = activeRide.rows[0].status;
                 currentRideDest = activeRide.rows[0].destination;
             }
 
-            // 🟢 BROADCAST TO ADMIN: Include Status & Destination
             io.emit('admin_driver_update', { 
                 id: data.driverId, 
                 lat: data.lat, 
@@ -197,7 +191,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 2. GET ESTIMATE (Unchanged)
+    // 2. GET ESTIMATE
     socket.on('get_estimate', async (data) => {
         try {
             const tripRoute = await getRouteData(data.pickupLat, data.pickupLng, data.destination);
@@ -207,7 +201,6 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            // Fare Calculation (Fixed ₹30/km)
             let baseFare = tripRoute.distanceKm * 30; 
             if (baseFare < 30) baseFare = 30; 
             const finalFare = Math.round(baseFare); 
@@ -225,7 +218,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 3. REQUEST RIDE (Starts with 2km)
+    // 3. REQUEST RIDE
     socket.on('request_ride', async (data) => {
         console.log(`🚀 New Ride Request from Rider ${data.riderId}`);
 
@@ -233,7 +226,6 @@ io.on('connection', (socket) => {
             const riderRes = await db.query(`SELECT phone FROM riders WHERE id = $1`, [data.riderId]);
             const riderPhone = riderRes.rows.length > 0 ? riderRes.rows[0].phone : null;
 
-            // 1. Save Request to DB
             const result = await db.query(
                 `INSERT INTO rides (rider_id, rider_socket_id, pickup_lat, pickup_lng, drop_lat, drop_lng, destination, fare, status) 
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'REQUESTED') RETURNING id`,
@@ -244,25 +236,22 @@ io.on('connection', (socket) => {
             const riderSocketId = socket.id;
             const ridePayload = { ...data, ride_id: rideId, rider_id: riderSocketId, riderPhone: riderPhone };
 
-            // 2. Start Phase 1 Search (2km Radius)
-            startDriverSearch(rideId, ridePayload, 2000, [], riderSocketId);
+            // Start Search
+            startDriverSearch(rideId, ridePayload, 5000, [], riderSocketId);
 
         } catch (err) { console.error("Request Error:", err); }
     });
 
-    // 🟢 HELPER: Recursive Driver Search
+    // 🟢 HELPER: Driver Search with FIXED TIMEOUT LOGIC
     async function startDriverSearch(rideId, rideData, radius, notifiedDriverIds, riderSocketId) {
         console.log(`🔎 Searching drivers for Ride ${rideId} within ${radius}m...`);
 
         try {
-            // Check if ride is still valid (not cancelled/accepted)
             const statusCheck = await db.query("SELECT status FROM rides WHERE id = $1", [rideId]);
             if (statusCheck.rows.length === 0 || statusCheck.rows[0].status !== 'REQUESTED') {
-                return; // Stop logic
+                return; 
             }
 
-            // Find nearest 10 drivers in radius, excluding already notified ones
-            // Also calculates real-time distance from driver to pickup
             const nearbyDrivers = await db.query(
                 `SELECT id, socket_id, fcm_token, 
                         ST_Distance(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) as dist_meters
@@ -279,9 +268,7 @@ io.on('connection', (socket) => {
                 console.log(`Found ${nearbyDrivers.rows.length} new drivers. Sending requests...`);
                 
                 nearbyDrivers.rows.forEach(driver => {
-                    notifiedDriverIds.push(driver.id); // Add to exclusion list
-                    
-                    // Send request with dynamic distance label
+                    notifiedDriverIds.push(driver.id); 
                     const distKm = (driver.dist_meters / 1000).toFixed(1);
                     io.to(driver.socket_id).emit('driver_request', {
                         ...rideData,
@@ -294,43 +281,48 @@ io.on('connection', (socket) => {
                 });
             }
 
-            // 🟢 CASCADING LOGIC (TIMERS)
-            
-            // Phase 1 (2000m) -> Wait 15s -> Go to Phase 2 (5000m)
-            if (radius === 2000) {
-                const timer = setTimeout(() => {
-                    console.log("⏰ Phase 1 ended. Expanding to 5km...");
-                    // 2000m + 3000m = 5000m
-                    startDriverSearch(rideId, rideData, 5000, notifiedDriverIds, riderSocketId);
-                }, 15000); 
-                rideTimers.set(rideId, timer);
-            } 
-            // Phase 2 (5000m) -> Wait 15s -> Timeout
-            else if (radius === 5000) {
-                const timer = setTimeout(async () => {
-                    console.log("⏰ Phase 2 ended. No drivers found.");
-                    
-                    // Mark ride as timeout
-                    await db.query("UPDATE rides SET status = 'TIMEOUT' WHERE id = $1 AND status = 'REQUESTED'", [rideId]);
-                    
-                    // Tell Rider
-                    io.to(riderSocketId).emit('ride_timeout');
+            // 🟢 FIXED TIMEOUT LOGIC
+            // 1. We create the timer.
+            // 2. We SAVE it to the global map so we can cancel it later.
+            const timerId = setTimeout(async () => {
+                try {
+                    // DOUBLE CHECK: Is the ride still pending?
+                    const check = await db.query("SELECT status FROM rides WHERE id = $1", [rideId]);
+
+                    if (check.rows.length > 0 && check.rows[0].status === 'REQUESTED') {
+                        // It really is pending. Timeout the ride.
+                        await db.query("UPDATE rides SET status = 'TIMEOUT' WHERE id = $1", [rideId]);
+                        
+                        // Notify User
+                        io.to(riderSocketId).emit('no_drivers_found'); 
+                        console.log(`Ride ${rideId} timed out (No drivers accepted).`);
+                    } else {
+                        // It was accepted! Do nothing.
+                        console.log(`Ride ${rideId} was accepted during the wait. Ignoring timeout.`);
+                    }
+
+                    // Clean up map
                     rideTimers.delete(rideId);
-                }, 15000); 
-                rideTimers.set(rideId, timer);
-            }
+
+                } catch (err) {
+                    console.error("Timeout Error:", err.message);
+                }
+            }, 60000); // 60 Seconds Timeout
+
+            // 🟢 SAVE TIMER ID (Crucial Fix)
+            rideTimers.set(rideId, timerId);
 
         } catch (err) {
             console.error("Search Logic Error:", err);
         }
     }
 
-    // 🟢 4. ACCEPT RIDE (Stops the Timer)
+    // 4. ACCEPT RIDE
     socket.on('accept_ride', async (data) => {
         console.log(`Attempting to accept ride: ${data.ride_id}`);
         
         try {
-            // ATOMIC UPDATE
+            // ATOMIC UPDATE (Prevents double booking)
             const result = await db.query(
                 `UPDATE rides 
                  SET driver_id = $1, status = 'ACCEPTED' 
@@ -344,18 +336,16 @@ io.on('connection', (socket) => {
                 return; 
             }
 
-            // ✅ STOP THE SEARCH TIMER
+            // ✅ STOP THE SEARCH TIMER (Now this works because we saved it!)
             if (rideTimers.has(data.ride_id)) {
                 clearTimeout(rideTimers.get(data.ride_id));
                 rideTimers.delete(data.ride_id);
                 console.log(`🛑 Timer cancelled for Ride ${data.ride_id}`);
             }
 
-            // Fetch Driver Info
             const driverInfo = await db.query(`SELECT name, phone FROM drivers WHERE id = $1`, [data.driver_id]);
             const driver = driverInfo.rows[0];
 
-            // Notify Rider
             io.to(data.rider_id).emit('ride_accepted', {
                 ride_id: data.ride_id, 
                 driverName: driver ? driver.name : "Driver",
@@ -364,10 +354,8 @@ io.on('connection', (socket) => {
                 lat: data.driverLat, lng: data.driverLng, fare: data.fare 
             });
 
-            // Notify Driver
             socket.emit('ride_booking_success', { ride_id: data.ride_id });
 
-            // Send Route
             const pickupRoute = await getRouteData(data.driverLat, data.driverLng, `${data.pickupLat},${data.pickupLng}`);
             socket.emit('ride_started_info', { 
                 pickupPolyline: pickupRoute ? pickupRoute.polyline : null, 
@@ -379,7 +367,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 🟢 5. CANCEL RIDE (Stops the Timer)
+    // 5. CANCEL RIDE
     socket.on('cancel_ride', async (data) => {
         console.log(`Ride ${data.ride_id} cancelled by user`);
         await db.query("UPDATE rides SET status = 'CANCELLED' WHERE id = $1", [data.ride_id]);
@@ -390,7 +378,6 @@ io.on('connection', (socket) => {
             rideTimers.delete(data.ride_id);
         }
 
-        // Notify Driver if one was assigned
         const rideData = await db.query(`SELECT driver_id FROM rides WHERE id = $1`, [data.ride_id]);
         if (rideData.rows.length > 0 && rideData.rows[0].driver_id) {
              const driverRes = await db.query(`SELECT socket_id FROM drivers WHERE id = $1`, [rideData.rows[0].driver_id]);
