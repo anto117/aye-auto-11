@@ -149,6 +149,10 @@ io.on('connection', (socket) => {
     // 1. DRIVER LOCATION
     socket.on('driver_location', async (data) => {
         try {
+            // 🟢 NEW FIX: Remove this socket ID from any previous accounts first
+            await db.query(`UPDATE drivers SET is_online = false, socket_id = NULL WHERE socket_id = $1`, [socket.id]);
+
+            // Now update the correct, current driver
             await db.query(
                 `UPDATE drivers 
                  SET location = ST_SetSRID(ST_MakePoint($1, $2), 4326), 
