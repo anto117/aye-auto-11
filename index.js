@@ -92,6 +92,11 @@ app.use('/api/rider-auth', riderAuthRoutes);
 const io = new Server(server, { cors: { origin: "*" } });
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY; 
 
+// 🧹 AUTO-CLEANUP: Set all drivers offline when the server boots up
+db.query("UPDATE drivers SET is_online = false").then(() => {
+    console.log("🧹 Wiped all Ghost Drivers! Database is clean.");
+}).catch(err => console.error("Cleanup error:", err));
+
 // 🟢 GLOBAL MAP TO MANAGE DISPATCH TIMERS
 const rideTimers = new Map();
 
@@ -219,7 +224,6 @@ io.on('connection', (socket) => {
     });
 
     // 3. REQUEST RIDE
-    // 3. REQUEST RIDE
     socket.on('request_ride', async (data) => {
         console.log(`🚀 New Ride Request from Rider ${data.riderId} for a ${data.vehicleType || 'Auto'}`);
 
@@ -271,6 +275,9 @@ io.on('connection', (socket) => {
                 console.log(`Found ${nearbyDrivers.rows.length} new drivers. Sending requests...`);
                 
                 nearbyDrivers.rows.forEach(driver => {
+                    // 🟢 ADDED THIS LOG TO DIAGNOSE EXACT DRIVER TARGETING:
+                    console.log(`--> Pinging Driver ID: ${driver.id} on Socket: ${driver.socket_id}`);
+                    
                     notifiedDriverIds.push(driver.id); 
                     const distKm = (driver.dist_meters / 1000).toFixed(1);
                     io.to(driver.socket_id).emit('driver_request', {
@@ -285,8 +292,6 @@ io.on('connection', (socket) => {
             }
 
             // 🟢 FIXED TIMEOUT LOGIC
-            // 1. We create the timer.
-            // 2. We SAVE it to the global map so we can cancel it later.
             const timerId = setTimeout(async () => {
                 try {
                     // DOUBLE CHECK: Is the ride still pending?
