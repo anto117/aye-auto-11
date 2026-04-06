@@ -219,32 +219,33 @@ io.on('connection', (socket) => {
     });
 
     // 3. REQUEST RIDE
+    // 3. REQUEST RIDE
     socket.on('request_ride', async (data) => {
-        console.log(`🚀 New Ride Request from Rider ${data.riderId}`);
+        console.log(`🚀 New Ride Request from Rider ${data.riderId} for a ${data.vehicleType || 'Auto'}`);
 
         try {
             const riderRes = await db.query(`SELECT phone FROM riders WHERE id = $1`, [data.riderId]);
             const riderPhone = riderRes.rows.length > 0 ? riderRes.rows[0].phone : null;
 
+            // 🟢 NEW: Insert the requested vehicle_type into the rides table
             const result = await db.query(
-                `INSERT INTO rides (rider_id, rider_socket_id, pickup_lat, pickup_lng, drop_lat, drop_lng, destination, fare, status) 
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'REQUESTED') RETURNING id`,
-                [data.riderId, socket.id, data.pickupLat, data.pickupLng, data.dropLat, data.dropLng, data.destination, data.fare]
+                `INSERT INTO rides (rider_id, rider_socket_id, pickup_lat, pickup_lng, drop_lat, drop_lng, destination, fare, status, vehicle_type) 
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'REQUESTED', $9) RETURNING id`,
+                [data.riderId, socket.id, data.pickupLat, data.pickupLng, data.dropLat, data.dropLng, data.destination, data.fare, data.vehicleType || 'Auto']
             );
             
             const rideId = result.rows[0].id;
             const riderSocketId = socket.id;
             const ridePayload = { ...data, ride_id: rideId, rider_id: riderSocketId, riderPhone: riderPhone };
 
-            // Start Search
             startDriverSearch(rideId, ridePayload, 5000, [], riderSocketId);
 
         } catch (err) { console.error("Request Error:", err); }
     });
 
     // 🟢 HELPER: Driver Search with FIXED TIMEOUT LOGIC
-    async function startDriverSearch(rideId, rideData, radius, notifiedDriverIds, riderSocketId) {
-        console.log(`🔎 Searching drivers for Ride ${rideId} within ${radius}m...`);
+   async function startDriverSearch(rideId, rideData, radius, notifiedDriverIds, riderSocketId) {
+        console.log(`🔎 Searching ${rideData.vehicleType || 'Auto'} drivers for Ride ${rideId} within ${radius}m...`);
 
         try {
             const statusCheck = await db.query("SELECT status FROM rides WHERE id = $1", [rideId]);
@@ -252,16 +253,18 @@ io.on('connection', (socket) => {
                 return; 
             }
 
+            // 🟢 NEW: Filter drivers by vehicle_type matching the ride request
             const nearbyDrivers = await db.query(
                 `SELECT id, socket_id, fcm_token, 
                         ST_Distance(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) as dist_meters
                  FROM drivers 
                  WHERE is_online = true 
+                 AND vehicle_type = $5 
                  AND id != ALL($3::int[]) 
                  AND ST_DWithin(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $4)
                  ORDER BY dist_meters ASC
                  LIMIT 10`,
-                [rideData.pickupLng, rideData.pickupLat, notifiedDriverIds, radius]
+                [rideData.pickupLng, rideData.pickupLat, notifiedDriverIds, radius, rideData.vehicleType || 'Auto']
             );
 
             if (nearbyDrivers.rows.length > 0) {

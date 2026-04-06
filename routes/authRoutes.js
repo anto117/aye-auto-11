@@ -2,25 +2,25 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db'); 
 
-// 🟢 1. DRIVER REGISTRATION (The missing route!)
+// 🟢 1. DRIVER REGISTRATION
 router.post('/register', async (req, res) => {
-    const { name, phone, vehicle_details, password } = req.body;
+    // 🟢 NEW: Added vehicle_type
+    const { name, phone, vehicle_details, password, vehicle_type } = req.body;
 
     if (!name || !phone || !vehicle_details || !password) {
         return res.status(400).json({ success: false, msg: "Please fill all fields" });
     }
 
     try {
-        // Check if phone exists
         const checkUser = await db.query("SELECT * FROM drivers WHERE phone = $1", [phone]);
         if (checkUser.rows.length > 0) {
             return res.status(400).json({ success: false, msg: "Phone number already registered" });
         }
 
-        // Create Driver
+        // 🟢 NEW: Save vehicle_type to the database
         const newDriver = await db.query(
-            "INSERT INTO drivers (name, phone, vehicle_details, password) VALUES ($1, $2, $3, $4) RETURNING *",
-            [name, phone, vehicle_details, password]
+            "INSERT INTO drivers (name, phone, vehicle_details, password, vehicle_type) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+            [name, phone, vehicle_details, password, vehicle_type || 'Auto']
         );
 
         res.json({
