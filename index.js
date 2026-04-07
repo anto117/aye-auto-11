@@ -210,12 +210,19 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            let baseFare = tripRoute.distanceKm * 30; 
-            if (baseFare < 30) baseFare = 30; 
-            const finalFare = Math.round(baseFare); 
+            // 🟢 Auto Fare Calculation (₹30/km)
+            let baseFareAuto = tripRoute.distanceKm * 30; 
+            if (baseFareAuto < 30) baseFareAuto = 30; 
+            const finalFareAuto = Math.round(baseFareAuto); 
+
+            // 🟢 Bike Fare Calculation (₹8/km)
+            let baseFareBike = tripRoute.distanceKm * 8; 
+            if (baseFareBike < 20) baseFareBike = 20; // Minimum ₹20 fare
+            const finalFareBike = Math.round(baseFareBike); 
 
             socket.emit('estimate_response', {
-                fareUPI: finalFare,
+                fareUPI: finalFareAuto,   // Sends Auto fare
+                fareBike: finalFareBike,  // explicitly sends new Bike fare
                 tripDistance: tripRoute.distanceText,
                 dropLat: tripRoute.endLat,
                 dropLng: tripRoute.endLng,
