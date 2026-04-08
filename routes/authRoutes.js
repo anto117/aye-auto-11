@@ -1,14 +1,33 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../config/db'); 
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
-// 🟢 1. DRIVER REGISTRATION
-router.post('/register', async (req, res) => {
-    // 🟢 NEW: Added vehicle_type
-    const { name, phone, vehicle_details, password, vehicle_type } = req.body;
+// 🟢 Setup Image Storage (Saves to public/uploads)
+const uploadDir = path.join(__dirname, '../public/uploads');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, uploadDir);
+    },
+    filename: function (req, file, cb) {
+        cb(null, Date.now() + '-' + file.originalname.replace(/\s+/g, '-'));
+    }
+});
+
+const upload = multer({ storage: storage });
+
+// 🟢 1. DRIVER REGISTRATION (Now handles Images!)
+router.post('/register', upload.fields([{ name: 'license', maxCount: 1 }, { name: 'rc', maxCount: 1 }]), async (req, res) => {
+    const { name, phone, age, vehicle_details, password, vehicle_type } = req.body;
 
     if (!name || !phone || !vehicle_details || !password) {
-        return res.status(400).json({ success: false, msg: "Please fill all fields" });
+        return res.status(400).json({ success: false, msg: "Please fill all required fields" });
     }
 
     try {
@@ -17,10 +36,14 @@ router.post('/register', async (req, res) => {
             return res.status(400).json({ success: false, msg: "Phone number already registered" });
         }
 
-        // 🟢 NEW: Save vehicle_type to the database
+        // Get the paths to the saved images
+        const licenseUrl = req.files && req.files['license'] ? `/uploads/${req.files['license'][0].filename}` : null;
+        const rcUrl = req.files && req.files['rc'] ? `/uploads/${req.files['rc'][0].filename}` : null;
+
+        // Save everything to the database
         const newDriver = await db.query(
-            "INSERT INTO drivers (name, phone, vehicle_details, password, vehicle_type) VALUES ($1, $2, $3, $4, $5) RETURNING *",
-            [name, phone, vehicle_details, password, vehicle_type || 'Auto']
+            "INSERT INTO drivers (name, phone, age, vehicle_details, password, vehicle_type, license_url, rc_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *",
+            [name, phone, age || null, vehicle_details, password, vehicle_type || 'Bike', licenseUrl, rcUrl]
         );
 
         res.json({

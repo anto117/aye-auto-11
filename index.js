@@ -37,9 +37,11 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- ADMIN API ROUTES ---
+// --- ADMIN API ROUTES ---
 app.get('/api/admin/drivers', async (req, res) => {
     try {
-        const result = await db.query("SELECT id, name, phone, is_verified, is_online FROM drivers ORDER BY id DESC");
+        // 🟢 Updated to pull the new Image URLs and Age
+        const result = await db.query("SELECT id, name, phone, age, vehicle_type, vehicle_details, license_url, rc_url, is_verified, is_online FROM drivers ORDER BY id DESC");
         res.json(result.rows);
     } catch (err) { 
         console.error("Admin Driver Fetch Error:", err.message);
