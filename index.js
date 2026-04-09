@@ -261,16 +261,37 @@ io.on('connection', (socket) => {
     });
 
     // 🟢 HELPER: Driver Search with FIXED TIMEOUT LOGIC
-   async function startDriverSearch(rideId, rideData, radius, notifiedDriverIds, riderSocketId) {
-        console.log(`🔎 Searching ${rideData.vehicleType || 'Auto'} drivers for Ride ${rideId} within ${radius}m...`);
+   // 🟢 UPGRADED HELPER: Driver Search with SPINNING RADAR LOGIC
+async function startDriverSearch(rideId, rideData, radius, notifiedDriverIds, riderSocketId) {
+    console.log(`📡 Starting Radar for ${rideData.vehicleType || 'Auto'} drivers for Ride ${rideId}...`);
+
+    let attempts = 0;
+    const maxAttempts = 12; // 12 pings * 5 seconds = 60 seconds timeout
+
+    // Create a looping interval that runs every 5 seconds
+    const radarInterval = setInterval(async () => {
+        attempts++;
 
         try {
+            // 1. Is the ride still pending?
             const statusCheck = await db.query("SELECT status FROM rides WHERE id = $1", [rideId]);
             if (statusCheck.rows.length === 0 || statusCheck.rows[0].status !== 'REQUESTED') {
+                clearInterval(radarInterval); // Stop the radar
+                rideTimers.delete(rideId);
                 return; 
             }
 
-            // 🟢 NEW: Filter drivers by vehicle_type matching the ride request
+            // 2. Have we searched for 60 seconds? (Timeout)
+            if (attempts > maxAttempts) {
+                clearInterval(radarInterval);
+                rideTimers.delete(rideId);
+                await db.query("UPDATE rides SET status = 'TIMEOUT' WHERE id = $1", [rideId]);
+                io.to(riderSocketId).emit('no_drivers_found'); 
+                console.log(`Ride ${rideId} timed out (No drivers found after 60s).`);
+                return;
+            }
+
+            // 3. Ping the database for drivers
             const nearbyDrivers = await db.query(
                 `SELECT id, socket_id, fcm_token, 
                         ST_Distance(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) as dist_meters
@@ -280,19 +301,18 @@ io.on('connection', (socket) => {
                  AND id != ALL($3::int[]) 
                  AND ST_DWithin(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $4)
                  ORDER BY dist_meters ASC
-                 LIMIT 10`,
+                 LIMIT 5`,
                 [rideData.pickupLng, rideData.pickupLat, notifiedDriverIds, radius, rideData.vehicleType || 'Auto']
             );
 
+            // 4. Send requests to any newly found drivers
             if (nearbyDrivers.rows.length > 0) {
-                console.log(`Found ${nearbyDrivers.rows.length} new drivers. Sending requests...`);
+                console.log(`Radar Sweep ${attempts}: Found ${nearbyDrivers.rows.length} new driver(s)! Pinging them now...`);
                 
                 nearbyDrivers.rows.forEach(driver => {
-                    // 🟢 ADDED THIS LOG TO DIAGNOSE EXACT DRIVER TARGETING:
-                    console.log(`--> Pinging Driver ID: ${driver.id} on Socket: ${driver.socket_id}`);
-                    
                     notifiedDriverIds.push(driver.id); 
                     const distKm = (driver.dist_meters / 1000).toFixed(1);
+                    
                     io.to(driver.socket_id).emit('driver_request', {
                         ...rideData,
                         distance: `${distKm} km to pickup` 
@@ -304,39 +324,14 @@ io.on('connection', (socket) => {
                 });
             }
 
-            // 🟢 FIXED TIMEOUT LOGIC
-            const timerId = setTimeout(async () => {
-                try {
-                    // DOUBLE CHECK: Is the ride still pending?
-                    const check = await db.query("SELECT status FROM rides WHERE id = $1", [rideId]);
-
-                    if (check.rows.length > 0 && check.rows[0].status === 'REQUESTED') {
-                        // It really is pending. Timeout the ride.
-                        await db.query("UPDATE rides SET status = 'TIMEOUT' WHERE id = $1", [rideId]);
-                        
-                        // Notify User
-                        io.to(riderSocketId).emit('no_drivers_found'); 
-                        console.log(`Ride ${rideId} timed out (No drivers accepted).`);
-                    } else {
-                        // It was accepted! Do nothing.
-                        console.log(`Ride ${rideId} was accepted during the wait. Ignoring timeout.`);
-                    }
-
-                    // Clean up map
-                    rideTimers.delete(rideId);
-
-                } catch (err) {
-                    console.error("Timeout Error:", err.message);
-                }
-            }, 60000); // 60 Seconds Timeout
-
-            // 🟢 SAVE TIMER ID (Crucial Fix)
-            rideTimers.set(rideId, timerId);
-
         } catch (err) {
-            console.error("Search Logic Error:", err);
+            console.error("Radar Logic Error:", err);
         }
-    }
+    }, 5000); // 5000ms = sweeps every 5 seconds
+
+    // Save this interval ID so we can cancel it if a driver accepts!
+    rideTimers.set(rideId, radarInterval);
+}
 
     // 4. ACCEPT RIDE
     socket.on('accept_ride', async (data) => {
@@ -359,7 +354,7 @@ io.on('connection', (socket) => {
 
             // ✅ STOP THE SEARCH TIMER (Now this works because we saved it!)
             if (rideTimers.has(data.ride_id)) {
-                clearTimeout(rideTimers.get(data.ride_id));
+                clearInterval(rideTimers.get(data.ride_id));
                 rideTimers.delete(data.ride_id);
                 console.log(`🛑 Timer cancelled for Ride ${data.ride_id}`);
             }
@@ -395,7 +390,7 @@ io.on('connection', (socket) => {
         
         // Stop the search timer
         if (rideTimers.has(data.ride_id)) {
-            clearTimeout(rideTimers.get(data.ride_id));
+            clearInterval(rideTimers.get(data.ride_id));
             rideTimers.delete(data.ride_id);
         }
 
