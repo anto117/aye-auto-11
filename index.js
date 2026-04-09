@@ -361,13 +361,16 @@ async function startDriverSearch(rideId, rideData, radius, notifiedDriverIds, ri
 
             const driverInfo = await db.query(`SELECT name, phone FROM drivers WHERE id = $1`, [data.driver_id]);
             const driver = driverInfo.rows[0];
-
-            io.to(data.rider_id).emit('ride_accepted', {
+            const acceptedRide = result.rows[0];
+          io.to(acceptedRide.rider_socket_id).emit('ride_accepted', {
                 ride_id: data.ride_id, 
                 driverName: driver ? driver.name : "Driver",
                 driverPhone: driver ? driver.phone : "0000000000", 
-                vehicle: "Auto", eta: "5 mins",
-                lat: data.driverLat, lng: data.driverLng, fare: data.fare 
+                vehicle: acceptedRide.vehicle_type, // 🟢 Fixes the "Auto" hardcoding bug!
+                eta: "5 mins",
+                lat: data.driverLat, 
+                lng: data.driverLng, 
+                fare: acceptedRide.fare 
             });
 
             socket.emit('ride_booking_success', { ride_id: data.ride_id });
