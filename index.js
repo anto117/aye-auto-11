@@ -434,7 +434,7 @@ async function startDriverSearch(rideId, rideData, radius, notifiedDriverIds, ri
 });
 // 📢 AUTOMATED MARKETING ENGINE
 // The syntax '0 17 * * 5' means: Minute 0, Hour 17 (5 PM), Any day of month, Any month, Day 5 (Friday)
-cron.schedule('0 17 * * 5', async () => {
+cron.schedule('* * * * *', async () => {
     console.log("⏰ Running Friday Evening Promo Campaign...");
     
     try {
