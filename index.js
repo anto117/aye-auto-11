@@ -194,6 +194,15 @@ io.on('connection', (socket) => {
             console.error("Geo Update Error:", err.message);
         }
     });
+    // 10. SAVE RIDER FCM TOKEN FOR MARKETING
+    socket.on('update_fcm_token', async (data) => {
+        try {
+            await db.query("UPDATE riders SET fcm_token = $1 WHERE id = $2", [data.token, data.riderId]);
+            console.log(`📱 Saved FCM Token for Rider ${data.riderId}`);
+        } catch(e) { 
+            console.error("Token Save Error:", e.message); 
+        }
+    });
 
     socket.on('disconnect', async () => {
         try {
