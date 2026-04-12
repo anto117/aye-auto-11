@@ -443,23 +443,30 @@ async function startDriverSearch(rideId, rideData, radius, notifiedDriverIds, ri
 });
 // 📢 AUTOMATED MARKETING ENGINE
 // The syntax '0 17 * * 5' means: Minute 0, Hour 17 (5 PM), Any day of month, Any month, Day 5 (Friday)
-cron.schedule('* * * * *', async () => {
-    console.log("⏰ Running Friday Evening Promo Campaign...");
+c// 📢 SMART DAILY MARKETING ENGINE
+const dailyPromos = {
+    0: { title: "Sunday Funday 🍿", body: "Don't let traffic ruin your Sunday. Grab an Aye Bike!" },
+    1: { title: "Monday Rush ☕", body: "Beat the Monday blues and the morning traffic. Ride now." },
+    2: { title: "Smooth Tuesday 🛵", body: "Mid-week errands? Get there faster with Aye Auto." },
+    3: { title: "Hump Day! 🐪", body: "You're halfway through the week. Treat yourself to a stress-free ride." },
+    4: { title: "Thursday Hustle 💼", body: "Almost Friday! Let us handle the driving today." },
+    5: { title: "TGIF! 🎉", body: "Kick off your weekend! Book a ride to your favorite spot." },
+    6: { title: "Saturday Vibes 🍕", body: "Going out tonight? Ride safe and fast with Aye Auto." }
+};
+
+// The syntax '0 9,17 * * *' means: Minute 0, Hours 9 (AM) and 17 (5 PM), Every day.
+cron.schedule('0 9,17 * * *', async () => {
+    const today = new Date().getDay(); // Gets the day (0 = Sunday, 1 = Monday, etc.)
+    const promo = dailyPromos[today];
+
+    console.log(`⏰ Running Daily Promo: ${promo.title}`);
     
     try {
-        // 1. Get all users who have notifications enabled
         const result = await db.query("SELECT fcm_token FROM riders WHERE fcm_token IS NOT NULL");
         
         if (result.rows.length > 0) {
-            console.log(`Sending promos to ${result.rows.length} users...`);
-            
-            // 2. Loop through and blast the notification!
             result.rows.forEach(user => {
-                sendPushNotification(
-                    user.fcm_token, 
-                    "TGIF! 🎉", 
-                    "Kick off your weekend! Book an Aye Bike to beat the Friday evening traffic."
-                );
+                sendPushNotification(user.fcm_token, promo.title, promo.body);
             });
         }
     } catch (err) {
