@@ -6,6 +6,7 @@ const { Server } = require("socket.io");
 const db = require('./config/db'); 
 const admin = require("firebase-admin"); 
 const path = require('path'); 
+const cron = require('node-cron');
 require('dotenv').config();
 
 // 🟢 INITIALIZE FIREBASE
@@ -430,6 +431,31 @@ async function startDriverSearch(rideId, rideData, radius, notifiedDriverIds, ri
             await db.query(`UPDATE rides SET rating = $1, feedback = $2 WHERE id = $3`, [data.rating, data.comment, data.ride_id]);
         } catch(e) { console.error("Rating Error", e.message); }
     });
+});
+// 📢 AUTOMATED MARKETING ENGINE
+// The syntax '0 17 * * 5' means: Minute 0, Hour 17 (5 PM), Any day of month, Any month, Day 5 (Friday)
+cron.schedule('0 17 * * 5', async () => {
+    console.log("⏰ Running Friday Evening Promo Campaign...");
+    
+    try {
+        // 1. Get all users who have notifications enabled
+        const result = await db.query("SELECT fcm_token FROM riders WHERE fcm_token IS NOT NULL");
+        
+        if (result.rows.length > 0) {
+            console.log(`Sending promos to ${result.rows.length} users...`);
+            
+            // 2. Loop through and blast the notification!
+            result.rows.forEach(user => {
+                sendPushNotification(
+                    user.fcm_token, 
+                    "TGIF! 🎉", 
+                    "Kick off your weekend! Book an Aye Bike to beat the Friday evening traffic."
+                );
+            });
+        }
+    } catch (err) {
+        console.error("Marketing Cron Error:", err.message);
+    }
 });
 
 const PORT = process.env.PORT || 3001; 
