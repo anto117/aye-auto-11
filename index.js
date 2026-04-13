@@ -443,7 +443,7 @@ async function startDriverSearch(rideId, rideData, radius, notifiedDriverIds, ri
 });
 // 📢 AUTOMATED MARKETING ENGINE
 // The syntax '0 17 * * 5' means: Minute 0, Hour 17 (5 PM), Any day of month, Any month, Day 5 (Friday)
-c// 📢 SMART DAILY MARKETING ENGINE
+// 📢 SMART DAILY MARKETING ENGINE
 const dailyPromos = {
     0: { title: "Sunday Funday 🍿", body: "Don't let traffic ruin your Sunday. Grab an Aye Bike!" },
     1: { title: "Monday Rush ☕", body: "Beat the Monday blues and the morning traffic. Ride now." },
