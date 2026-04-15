@@ -34,7 +34,6 @@ const server = http.createServer(app);
 app.use(cors()); 
 app.use(express.json()); 
 
-// 🟢 SERVE ADMIN PANEL
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- ADMIN API ROUTES ---
@@ -43,7 +42,6 @@ app.get('/api/admin/drivers', async (req, res) => {
         const result = await db.query("SELECT id, name, phone, age, vehicle_type, vehicle_details, license_url, rc_url, is_verified, is_online FROM drivers ORDER BY id DESC");
         res.json(result.rows);
     } catch (err) { 
-        console.error("Admin Driver Fetch Error:", err.message);
         res.status(500).json({ error: err.message }); 
     }
 });
@@ -93,18 +91,16 @@ app.use('/api/rider-auth', riderAuthRoutes);
 const io = new Server(server, { cors: { origin: "*" } });
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY; 
 
-// 🧹 AUTO-CLEANUP: Set all drivers offline when the server boots up
 db.query("UPDATE drivers SET is_online = false").then(() => {
     console.log("🧹 Wiped all Ghost Drivers! Database is clean.");
 }).catch(err => console.error("Cleanup error:", err));
 
-// 🟢 GLOBAL MAP TO MANAGE DISPATCH TIMERS
 const rideTimers = new Map();
 
 // --- HELPER: Google Route Data ---
 async function getRouteData(startLat, startLng, destinationInput) {
     if (!GOOGLE_API_KEY) {
-        console.error("❌ MISSING GOOGLE_API_KEY in .env");
+        console.error("❌ MISSING GOOGLE_API_KEY");
         return null;
     }
     try {
@@ -191,11 +187,9 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 10. SAVE RIDER FCM TOKEN FOR MARKETING
     socket.on('update_fcm_token', async (data) => {
         try {
             await db.query("UPDATE riders SET fcm_token = $1 WHERE id = $2", [data.token, data.riderId]);
-            console.log(`📱 Saved FCM Token for Rider ${data.riderId}`);
         } catch(e) { 
             console.error("Token Save Error:", e.message); 
         }
@@ -264,18 +258,16 @@ io.on('connection', (socket) => {
         } catch (err) { console.error("Request Error:", err); }
     });
 
-    // 🟢 UPGRADED HELPER: Driver Search with SPINNING RADAR LOGIC
     async function startDriverSearch(rideId, rideData, radius, notifiedDriverIds, riderSocketId) {
         console.log(`📡 Starting Radar for ${rideData.vehicleType || 'Auto'} drivers for Ride ${rideId}...`);
 
         let attempts = 0;
-        const maxAttempts = 12; // 12 pings * 5 seconds = 60 seconds timeout
+        const maxAttempts = 12;
 
         const radarInterval = setInterval(async () => {
             attempts++;
 
             try {
-                // 1. Is the ride still pending?
                 const statusCheck = await db.query("SELECT status FROM rides WHERE id = $1", [rideId]);
                 if (statusCheck.rows.length === 0 || statusCheck.rows[0].status !== 'REQUESTED') {
                     clearInterval(radarInterval); 
@@ -283,17 +275,15 @@ io.on('connection', (socket) => {
                     return; 
                 }
 
-                // 2. Have we searched for 60 seconds? (Timeout)
                 if (attempts > maxAttempts) {
                     clearInterval(radarInterval);
                     rideTimers.delete(rideId);
                     await db.query("UPDATE rides SET status = 'TIMEOUT' WHERE id = $1", [rideId]);
                     io.to(riderSocketId).emit('no_drivers_found'); 
-                    console.log(`Ride ${rideId} timed out (No drivers found after 60s).`);
+                    console.log(`Ride ${rideId} timed out.`);
                     return;
                 }
 
-                // 3. Ping the database for drivers (🟢 ADDED AND is_available = true)
                 const nearbyDrivers = await db.query(
                     `SELECT id, socket_id, fcm_token, 
                             ST_Distance(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) as dist_meters
@@ -308,9 +298,8 @@ io.on('connection', (socket) => {
                     [rideData.pickupLng, rideData.pickupLat, notifiedDriverIds, radius, rideData.vehicleType || 'Auto']
                 );
 
-                // 4. Send requests to any newly found drivers
                 if (nearbyDrivers.rows.length > 0) {
-                    console.log(`Radar Sweep ${attempts}: Found ${nearbyDrivers.rows.length} new driver(s)! Pinging them now...`);
+                    console.log(`Radar Sweep ${attempts}: Found ${nearbyDrivers.rows.length} new driver(s)!`);
                     
                     nearbyDrivers.rows.forEach(driver => {
                         notifiedDriverIds.push(driver.id); 
@@ -337,10 +326,7 @@ io.on('connection', (socket) => {
 
     // 4. ACCEPT RIDE
     socket.on('accept_ride', async (data) => {
-        console.log(`Attempting to accept ride: ${data.ride_id}`);
-        
         try {
-            // ATOMIC UPDATE
             const result = await db.query(
                 `UPDATE rides 
                  SET driver_id = $1, status = 'ACCEPTED' 
@@ -354,14 +340,11 @@ io.on('connection', (socket) => {
                 return; 
             }
 
-            // 🟢 NEW: Mark the driver as BUSY!
             await db.query("UPDATE drivers SET is_available = false WHERE id = $1", [data.driver_id]);
-            console.log(`Driver ${data.driver_id} is now ON A RIDE and hidden from new requests.`);
 
             if (rideTimers.has(data.ride_id)) {
                 clearInterval(rideTimers.get(data.ride_id));
                 rideTimers.delete(data.ride_id);
-                console.log(`🛑 Timer cancelled for Ride ${data.ride_id}`);
             }
 
             const driverInfo = await db.query(`SELECT name, phone FROM drivers WHERE id = $1`, [data.driver_id]);
@@ -394,7 +377,6 @@ io.on('connection', (socket) => {
 
     // 5. CANCEL RIDE
     socket.on('cancel_ride', async (data) => {
-        console.log(`Ride ${data.ride_id} cancelled by user`);
         await db.query("UPDATE rides SET status = 'CANCELLED' WHERE id = $1", [data.ride_id]);
         
         if (rideTimers.has(data.ride_id)) {
@@ -405,9 +387,7 @@ io.on('connection', (socket) => {
         const rideData = await db.query(`SELECT driver_id FROM rides WHERE id = $1`, [data.ride_id]);
         if (rideData.rows.length > 0 && rideData.rows[0].driver_id) {
              
-             // 🟢 NEW: Mark the driver as FREE again!
              await db.query("UPDATE drivers SET is_available = true WHERE id = $1", [rideData.rows[0].driver_id]);
-             console.log(`Driver ${rideData.rows[0].driver_id} is free again after cancellation.`);
 
              const driverRes = await db.query(`SELECT socket_id FROM drivers WHERE id = $1`, [rideData.rows[0].driver_id]);
              if (driverRes.rows.length > 0) io.to(driverRes.rows[0].socket_id).emit('ride_cancelled_by_user');
@@ -427,11 +407,9 @@ io.on('connection', (socket) => {
             await db.query(`UPDATE rides SET status = 'COMPLETED', payment_method = $1 WHERE id = $2`, [data.paymentMethod, data.ride_id]);
             socket.emit('ride_saved_success');
 
-            // 🟢 NEW: Mark the driver as FREE again!
             const rideInfo = await db.query(`SELECT driver_id FROM rides WHERE id = $1`, [data.ride_id]);
             if (rideInfo.rows.length > 0 && rideInfo.rows[0].driver_id) {
                 await db.query("UPDATE drivers SET is_available = true WHERE id = $1", [rideInfo.rows[0].driver_id]);
-                console.log(`Driver ${rideInfo.rows[0].driver_id} finished the ride and is available again!`);
             }
 
             const rideData = await db.query(`SELECT rider_socket_id FROM rides WHERE id = $1`, [data.ride_id]);
@@ -449,7 +427,6 @@ io.on('connection', (socket) => {
     });
 });
 
-// 📢 SMART DAILY MARKETING ENGINE
 const dailyPromos = {
     0: { title: "Sunday Funday 🍿", body: "Don't let traffic ruin your Sunday. Grab an Aye Bike!" },
     1: { title: "Monday Rush ☕", body: "Beat the Monday blues and the morning traffic. Ride now." },
