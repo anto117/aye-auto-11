@@ -149,8 +149,8 @@ router.post('/verify-code', async (req, res) => {
             const actualName = (name && name.trim() !== "") ? name.trim() : (stored.name || "New Rider");
 
             const newUser = await db.query(
-                "INSERT INTO riders (name, email) VALUES ($1, $2) RETURNING *",
-                [actualName, lowerEmail]
+                "INSERT INTO riders (name, email, phone) VALUES ($1, $2, $3) RETURNING *",
+                [actualName, lowerEmail, 'email_' + Date.now()]
             );
             return res.json({ success: true, user: newUser.rows[0], msg: "Account Created" });
         }
