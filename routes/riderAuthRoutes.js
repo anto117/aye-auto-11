@@ -114,7 +114,7 @@ router.post('/send-code', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 router.post('/verify-code', async (req, res) => {
     try {
-        const { email, code, name, isLogin } = req.body;
+        const { email, code, name, phone, isLogin } = req.body;
         const lowerEmail = email.toLowerCase();
 
         // Check code
@@ -148,9 +148,11 @@ router.post('/verify-code', async (req, res) => {
             // SIGNUP: Create new user
             const actualName = (name && name.trim() !== "") ? name.trim() : (stored.name || "New Rider");
 
+            const actualPhone = (phone && phone.trim() !== "") ? phone.trim() : null;
+
             const newUser = await db.query(
-                "INSERT INTO riders (name, email) VALUES ($1, $2) RETURNING *",
-                [actualName, lowerEmail]
+                "INSERT INTO riders (name, email, phone) VALUES ($1, $2, $3) RETURNING *",
+                [actualName, lowerEmail, actualPhone]
             );
             return res.json({ success: true, user: newUser.rows[0], msg: "Account Created" });
         }
